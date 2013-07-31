@@ -614,6 +614,36 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 
 	} else if (thdr.type() == TransportHeader::XSOCK_STREAM) {
 
+	/* =========================================================
+	 * TCP input
+	 * ========================================================= */
+		
+		// Obtain sk
+		XIDpair xid_pair;
+		xid_pair.set_src(_destination_xid);
+		xid_pair.set_dst(_source_xid);
+
+		// Get the dst(=receiver) port from XIDpair table
+		_dport = XIDpairToPort.get(xid_pair);
+
+		HashTable<unsigned short, bool>::iterator it1;
+		it1 = portToActive.find(_dport);
+
+		if(it1 != portToActive.end() ) {
+				sock *sk = portToSock.get_pointer(_dport);
+
+				switch(sk->sk_state)
+				{
+					case TCP_CLOSE:
+						goto discard;
+				// ....
+				}
+		}
+		
+		/* =========================================================
+		 * Old XSP's way of handling incoming packet
+	 	 * ========================================================= */
+
 		//printf("stream socket dport = %d\n", _dport);
 		if (thdr.pkt_info() == TransportHeader::SYN) {
 			//printf("syn dport = %d\n", _dport);
@@ -636,7 +666,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 //			if (it == XIDpairToConnectPending.end()) {
 				// if this is new request, put it in the queue
 
-				// Todo: 1. prepare new Daginfo and store it
+				// Todo: 1. prepare new sock and store it
 				//	 2. send SYNACK to client
 				//	   3. Notify the api of SYN reception
 
@@ -644,7 +674,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 				sock sk;
 				sk.port = -1; // just for now. This will be updated via Xaccept call
 
-				sk.sock_type = 0; // 0: Reliable transport, 1: Unreliable transport
+				sk.sock_type = XSOCKET_STREAM; 
 
 				sk.dst_path = src_path;
 				sk.src_path = dst_path;
@@ -744,7 +774,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 					sk->next_recv_seqnum = next_missing_seqnum(sk);
 				} 
 
-				portToSock.set(_dport, *sk); // TODO: why do we need this?
+				portToSock.set(_dport, *sk); 
 			
 				//In case of Client Mobility...	 Update 'sk->dst_path'
 				sk->dst_path = src_path;		
@@ -888,7 +918,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 			click_chatter("Sender moved, update to the new DAG");
 
 		} else {
-			//Unparse dag info
+			//Unparse sock info
 			String src_path = xiah.src_path().unparse();
 			String payload((const char*)thdr.payload(), xiah.plen() - thdr.hlen());
 
@@ -1004,7 +1034,7 @@ void XTRANSPORT::ProcessCachePacket(WritablePacket *p_in)
 
 				portToSock.set(_dport, *sk);
 
-				//Unparse dag info
+				//Unparse sock info
 				String src_path = xiah.src_path().unparse();
 
 				xia::XSocketMsg xia_socket_msg;
@@ -1160,11 +1190,10 @@ void XTRANSPORT::add_handlers() {
 ** FIXME: why is xia_socket_msg part of the xtransport class and not a local variable?????
 */
 void XTRANSPORT::Xsocket(unsigned short _sport) {
-	//Open socket.
-	//click_chatter("Xsocket: create socket %d\n", _sport);
-
-	xia::X_Socket_Msg *x_socket_msg = xia_socket_msg.mutable_x_socket();
-	int sock_type = x_socket_msg->type();
+:
+	/* =========================
+	 * Initialize socket variables
+	 * ========================= */
 
 	//Set the source port in sock
 	sock sk;
@@ -1176,14 +1205,71 @@ void XTRANSPORT::Xsocket(unsigned short _sport) {
 	sk.teardown_waiting = false;
 	sk.isAcceptSocket = false;
 	sk.num_connect_tries = 0; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
-	memset(sk.send_buffer, 0, sk.send_buffer_size * sizeof(WritablePacket*));
+	memset(sk.sent_pkt, 0, MAX_WIN_SIZE * sizeof(WritablePacket*));
 
 	//Set the socket_type (reliable or not) in sock
+	xia::X_Socket_Msg *x_socket_msg = xia_socket_msg.mutable_x_socket();
+	int sock_type = x_socket_msg->type();
 	sk.sock_type = sock_type;
+
+	/* =========================================================
+	 * Initialize TCP variables
+	 * http://lxr.linux.no/linux+v3.10.2/net/ipv4/tcp.c : 372
+	 * ========================================================= */
+	if(sock_type == XSOCKET_STREAM)
+	{
+		//tcp_init_xmit_timers(sk);
+		
+		// TODO: Linux use tp for tcp_sock, sk for sock, icsk for inet_connection_sock.
+		// 		 We currently only have sock. Should probably rename tp, icsk to sk later
+		sock *tp = &sk;	 
+		//sock *icsk = &sk;
+
+		//icsk->icsk_rto = TCP_TIMEOUT_INIT;
+		tp->mdev = TCP_TIMEOUT_INIT;
+
+		/* So many TCP implementations out there (incorrectly) count the
+		 * initial SYN frame in their delayed-ACK and congestion control
+		 * algorithms that we must have the following bandaid to talk
+		 * efficiently to them.  -DaveM
+		 */
+		tp->snd_cwnd = TCP_INIT_CWND;
+
+		/* See draft-stevens-tcpca-spec-01 for discussion of the
+		 * initialization of these values.
+		 */
+		tp->snd_ssthresh = TCP_INFINITE_SSTHRESH;
+		tp->snd_cwnd_clamp = ~0;
+		tp->mss_cache = TCP_MSS_DEFAULT;
+
+		//tp->reordering = sysctl_tcp_reordering;
+		//tcp_enable_early_retrans(tp);
+		//icsk->icsk_ca_ops = &tcp_init_congestion_ops;
+
+		tp->tsoffset = 0;
+
+		sk.sk_state = TCP_CLOSE;
+
+		//sk->sk_write_space = sk_stream_write_space;
+		//sock_set_flag(sk, SOCK_USE_WRITE_QUEUE);
+
+		//icsk->icsk_sync_mss = tcp_sync_mss;
+
+		/* Presumed zeroed, in order of appearance:
+		 *	cookie_in_always, cookie_out_never,
+		 *	s_data_constant, s_data_in, s_data_out
+		 */
+		//sk->sk_sndbuf = sysctl_tcp_wmem[1];
+		//sk->sk_rcvbuf = sysctl_tcp_rmem[1];
+
+		//local_bh_disable();
+		//sock_update_memcg(sk);
+		//sk_sockets_allocated_inc(sk);
+		//local_bh_enable();
+	}
 
 	// Map the source port to DagInfo
 	portToSock.set(_sport, sk);
-
 	portToActive.set(_sport, true);
 
 	hlim.set(_sport, HLIM_DEFAULT);
@@ -1657,7 +1743,7 @@ void XTRANSPORT::Xsend(unsigned short _sport, WritablePacket *p_in)
 	//click_chatter("pkt %s port %d", pktPayload.c_str(), _sport);
 	//printf("XSEND: %d bytes from (%d)\n", pktPayloadSize, _sport);
 
-	//Find DAG info for that stream
+	//Find sock info for that stream
 	sock *sk = portToSock.get_pointer(_sport);
 	if (sk && sk->isConnected) {
 
@@ -1763,7 +1849,7 @@ void XTRANSPORT::Xsendto(unsigned short _sport, WritablePacket *p_in)
 	XIAPath dst_path;
 	dst_path.parse(dest);
 
-	//Find DAG info for this DGRAM
+	//Find sock info for this DGRAM
 	sock *sk = portToSock.get_pointer(_sport);
 
 	if(!sk) {
@@ -1831,8 +1917,7 @@ void XTRANSPORT::Xsendto(unsigned short _sport, WritablePacket *p_in)
 
 	WritablePacket *p = NULL;
 
-	// FIXME: shouldn't be a raw number
-	if (sk->sock_type == 3) {
+	if (sk->sock_type == XSOCKET_RAW) {
 		xiah.set_nxt(nxt_xport.get(_sport));
 
 		xiah.set_plen(pktPayloadSize);
@@ -1880,7 +1965,7 @@ void XTRANSPORT::XrequestChunk(unsigned short _sport, WritablePacket *p_in)
 		XIAPath dst_path;
 		dst_path.parse(dest);
 
-		//Find DAG info for this DGRAM
+		//Find sock info for this DGRAM
 		sock *sk = portToSock.get_pointer(_sport);
 
 		if(!sk) {
@@ -2004,7 +2089,7 @@ void XTRANSPORT::XgetChunkStatus(unsigned short _sport)
 		XIAPath dst_path;
 		dst_path.parse(dest);
 
-		//Find DAG info for this DGRAM
+		//Find sock info for this DGRAM
 		sock *sk = portToSock.get_pointer(_sport);
 
 		XID	destination_cid = dst_path.xid(dst_path.destination_node());
@@ -2059,7 +2144,7 @@ void XTRANSPORT::XreadChunk(unsigned short _sport)
 	XIAPath dst_path;
 	dst_path.parse(dest);
 
-	//Find DAG info for this DGRAM
+	//Find sock info for this DGRAM
 	sock *sk = portToSock.get_pointer(_sport);
 
 	XID	destination_cid = dst_path.xid(dst_path.destination_node());
@@ -2092,7 +2177,7 @@ void XTRANSPORT::XreadChunk(unsigned short _sport)
 
 			XIAHeader xiah(copy->xia_header());
 
-			//Unparse dag info
+			//Unparse sock info
 			String src_path = xiah.src_path().unparse();
 
 			xia::XSocketMsg xia_socket_msg;
@@ -2228,7 +2313,7 @@ void XTRANSPORT::XputChunk(unsigned short _sport)
 	xiah.set_src_path(src_path);
 	xiah.set_nxt(CLICK_XIA_NXT_CID);
 
-	//Might need to remove more if another header is required (eg some control/DAG info)
+	//Might need to remove more if another header is required (eg some control/sock info)
 
 	WritablePacket *just_payload_part = WritablePacket::make(256, (const void*)pktPayload.c_str(), pktPayload.length(), 0);
 
