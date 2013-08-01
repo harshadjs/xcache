@@ -345,7 +345,9 @@ XTRANSPORT::copy_packet(Packet *p, sock *sk) {
 	copy_common(sk, xiahdr, xiah);
 
 	TransportHeader thdr(p);
-	TransportHeaderEncap *new_thdr = new TransportHeaderEncap(thdr.type(), thdr.pkt_info(), thdr.seq_num(), thdr.ack_num(), thdr.length());
+	TransportHeaderEncap *new_thdr = new TransportHeaderEncap(thdr.type(), 
+			thdr.seq_num(), thdr.ack_num(), thdr.offset(), thdr.flags(), 
+			thdr.checksum(), thdr.window(), thdr.timestamp());
 
 	WritablePacket *copy = WritablePacket::make(256, thdr.payload(), xiahdr.plen() - thdr.hlen(), 20);
 
@@ -635,9 +637,10 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 				switch(sk->sk_state)
 				{
 					case TCP_CLOSE:
-						goto discard;
+						click_chatter("TCP_CLOSE");
+						//goto discard;
 				// ....
-				}
+				};
 		}
 		
 		/* =========================================================
@@ -645,7 +648,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 	 	 * ========================================================= */
 
 		//printf("stream socket dport = %d\n", _dport);
-		if (thdr.pkt_info() == TransportHeader::SYN) {
+		if (thdr.flags() == TransportHeader::SYN) {
 			//printf("syn dport = %d\n", _dport);
 			// Connection request from client...
 
@@ -719,7 +722,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 			xiah_new.set_plen(strlen(dummy));
 			//click_chatter("Sent packet to network");
 
-			TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader( 0, 0, 0); // #seq, #ack, length
+			TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader( 0, 0); // #seq, #ack
 			p = thdr_new->encap(just_payload_part);
 
 			thdr_new->update();
@@ -737,7 +740,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 			// 3. Notify the api of SYN reception
 			//   Done below (via port#5005)
 
-		} else if (thdr.pkt_info() == TransportHeader::SYNACK) {
+		} else if (thdr.flags() == TransportHeader::SYNACK) {
 			XIDpair xid_pair;
 			xid_pair.set_src(_destination_xid);
 			xid_pair.set_dst(_source_xid);
@@ -752,7 +755,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 			sk->synack_waiting = false;
 			//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
 
-		} else if (thdr.pkt_info() == TransportHeader::DATA) {
+		} else if (thdr.flags() == TransportHeader::DATA) {
 			XIDpair xid_pair;
 			xid_pair.set_src(_destination_xid);
 			xid_pair.set_dst(_source_xid);
@@ -795,7 +798,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 
 				xiah_new.set_plen(strlen(dummy));
 
-				TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader( 0, sk->next_recv_seqnum, 0); // #seq, #ack, length
+				TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader( 0, sk->next_recv_seqnum); // #seq, #ack
 				p = thdr_new->encap(just_payload_part);
 
 				thdr_new->update();
@@ -814,7 +817,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 				printf("destination port not found: %d\n", _dport);
 			}
 
-		} else if (thdr.pkt_info() == TransportHeader::ACK) {
+		} else if (thdr.flags() == TransportHeader::ACK) {
 
 			XIDpair xid_pair;
 			xid_pair.set_src(_destination_xid);
@@ -876,11 +879,11 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 				//printf("port not found\n");
 			}
 
-		} else if (thdr.pkt_info() == TransportHeader::FIN) {
+		} else if (thdr.flags() == TransportHeader::FIN) {
 			//printf("FIN received, doing nothing\n");
 		}
 		else {
-			printf("UNKNOWN dport = %d hdr=%d\n", _dport, thdr.pkt_info());		
+			printf("UNKNOWN dport = %d hdr=%d\n", _dport, thdr.flags());		
 		}
 
 	} else if (thdr.type() == TransportHeader::XSOCK_DGRAM) {
@@ -1190,7 +1193,7 @@ void XTRANSPORT::add_handlers() {
 ** FIXME: why is xia_socket_msg part of the xtransport class and not a local variable?????
 */
 void XTRANSPORT::Xsocket(unsigned short _sport) {
-:
+
 	/* =========================
 	 * Initialize socket variables
 	 * ========================= */
@@ -1205,7 +1208,7 @@ void XTRANSPORT::Xsocket(unsigned short _sport) {
 	sk.teardown_waiting = false;
 	sk.isAcceptSocket = false;
 	sk.num_connect_tries = 0; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
-	memset(sk.sent_pkt, 0, MAX_WIN_SIZE * sizeof(WritablePacket*));
+	memset(sk.send_buffer, 0, sk.send_buffer_size * sizeof(WritablePacket*));
 
 	//Set the socket_type (reliable or not) in sock
 	xia::X_Socket_Msg *x_socket_msg = xia_socket_msg.mutable_x_socket();
@@ -1532,7 +1535,7 @@ void XTRANSPORT::Xconnect(unsigned short _sport)
 
 	WritablePacket *p = NULL;
 
-	TransportHeaderEncap *thdr = TransportHeaderEncap::MakeSYNHeader( 0, -1, 0); // #seq, #ack, length
+	TransportHeaderEncap *thdr = TransportHeaderEncap::MakeSYNHeader( 0, -1); // #seq, #ack
 
 	p = thdr->encap(just_payload_part);
 
@@ -1787,7 +1790,7 @@ void XTRANSPORT::Xsend(unsigned short _sport, WritablePacket *p_in)
 		WritablePacket *p = NULL;
 
 		//Add XIA Transport headers
-		TransportHeaderEncap *thdr = TransportHeaderEncap::MakeDATAHeader(sk->next_send_seqnum, sk->ack_num, 0 ); // #seq, #ack, length
+		TransportHeaderEncap *thdr = TransportHeaderEncap::MakeDATAHeader(sk->next_send_seqnum, sk->ack_num); // #seq, #ack
 		p = thdr->encap(just_payload_part);
 
 		thdr->update();
@@ -1932,7 +1935,7 @@ void XTRANSPORT::Xsendto(unsigned short _sport, WritablePacket *p_in)
 		//printf("payload=%s len=%d \n\n", x_sendto_msg->payload().c_str(), pktPayloadSize);
 
 		//Add XIA Transport headers
-		TransportHeaderEncap *thdr = TransportHeaderEncap::MakeDGRAMHeader(0); // length
+		TransportHeaderEncap *thdr = TransportHeaderEncap::MakeDGRAMHeader(); 
 		p = thdr->encap(just_payload_part);
 
 		thdr->update();

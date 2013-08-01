@@ -35,12 +35,12 @@ class TransportHeader : public XIAGenericExtHeader { public:
 	// TODO: SACK
 
     //enum { TYPE, PKT_INFO, SRC_XID, DST_XID, SEQ_NUM, ACK_NUM, LENGTH}; 	// Xtransport old header fields
-    //enum { SYN=1, SYNACK, DATA, ACK, FIN};	// XSP PKT_INFO (flags)
+    enum { SYN=1, SYNACK, DATA, ACK, FIN};	// XSP PKT_INFO (flags)
 
 	enum { TYPE, SEQ_NUM, ACK_NUM, OFFSET, FLAGS, CHECKSUM, RWIN, TIMESTAMP, SACK};	// new header fields (support XTCP) 
 	enum { XSOCK_STREAM=1, XSOCK_DGRAM, XSOCK_RAW, XSOCK_CHUNK};	// TYPE (protocol)
 
-	// XTCP flags
+	// TCP flags
 	#define	TH_FIN		0x01
 	#define	TH_SYN		0x02
 	#define	TH_RST		0x04
@@ -72,23 +72,29 @@ class TransportHeaderEncap : public XIAGenericExtHeaderEncap { public:
     //static TransportHeaderEncap* MakeRequestHeader() { return new TransportHeaderEncap(TransportHeader::OP_REQUEST,0,0); };
     //static TransportHeaderEncap* MakeRPTRequestHeader() { return new TransportHeaderEncap(TransportHeader::OP_REDUNDANT_REQUEST,0,0); };
     
-    /*static TransportHeaderEncap* MakeSYNHeader( uint32_t seq_num, uint32_t ack_num, uint16_t length ) 
-                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, TransportHeader::SYN, seq_num, ack_num, length); };
+    static TransportHeaderEncap* MakeSYNHeader( uint32_t seq_num, uint32_t ack_num ) 
+                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, seq_num, ack_num, 0, TransportHeader::SYN, 
+                                                            0, 0, 0); }; // checksum, window, ts
 
-    static TransportHeaderEncap* MakeSYNACKHeader( uint32_t seq_num, uint32_t ack_num, uint16_t length ) 
-                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, TransportHeader::SYNACK, seq_num, ack_num, length); }; 
-                        
-    static TransportHeaderEncap* MakeDATAHeader( uint32_t seq_num, uint32_t ack_num, uint16_t length ) 
-                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, TransportHeader::DATA, seq_num, ack_num, length); }; 
-                            
-    static TransportHeaderEncap* MakeACKHeader( uint32_t seq_num, uint32_t ack_num, uint16_t length ) 
-                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, TransportHeader::ACK, seq_num, ack_num, length); };                         
-                        
-    static TransportHeaderEncap* MakeFINHeader( uint32_t seq_num, uint32_t ack_num, uint16_t length ) 
-                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, TransportHeader::FIN, seq_num, ack_num, length); };     
-                                                           
-    static TransportHeaderEncap* MakeDGRAMHeader( uint16_t length ) 
-                        { return new TransportHeaderEncap(TransportHeader::XSOCK_DGRAM, TransportHeader::DATA, -1, -1, length); }; */
+    static TransportHeaderEncap* MakeSYNACKHeader( uint32_t seq_num, uint32_t ack_num ) 
+                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, seq_num, ack_num, 0, TransportHeader::SYNACK, 
+                                                            0, 0, 0); };
+
+    static TransportHeaderEncap* MakeDATAHeader( uint32_t seq_num, uint32_t ack_num ) 
+                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, seq_num, ack_num, 0, TransportHeader::DATA, 
+                                                            0, 0, 0); };
+
+    static TransportHeaderEncap* MakeACKHeader( uint32_t seq_num, uint32_t ack_num ) 
+                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, seq_num, ack_num, 0, TransportHeader::ACK, 
+                                                            0, 0, 0); };
+
+    static TransportHeaderEncap* MakeFINHeader( uint32_t seq_num, uint32_t ack_num ) 
+                        { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, seq_num, ack_num, 0, TransportHeader::FIN, 
+                                                            0, 0, 0); };
+
+    static TransportHeaderEncap* MakeDGRAMHeader( ) 
+                        { return new TransportHeaderEncap(TransportHeader::XSOCK_DGRAM, -1, -1, 0, TransportHeader::DATA, 
+                                                            0, 0, 0); }; 
                         
 };
 

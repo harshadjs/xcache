@@ -205,6 +205,12 @@ using namespace std;
 
 #define TCP_INFINITE_SSTHRESH 0x7fffffff
 
+/*
+ * TCP general constants (Can't find these in 3.10.2 src?)
+ */
+#define TCP_MSS_DEFAULT          536U   /* IPv4 (RFC1122, RFC2581) */
+#define TCP_MSS_DESIRED         1220U   /* IPv6 (tunneled), EDNS0 (RFC3226) */
+
 //  Definitions for the TCP protocol sk_state field.
 enum {
 	TCP_ESTABLISHED = 0,
