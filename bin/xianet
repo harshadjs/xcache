@@ -378,7 +378,7 @@ elif [ $ROUTER -eq 1 ]; then
 fi
 
 if [ "$HOSTNAME" == "" ]; then
-	HOSTNAME=$(hostname -s | tr -C -d 'a-zA-Z0-9')
+	HOSTNAME=$(hostname -s | tr -C -d 'a-zA-Z0-9\-')
 fi
 
 # By default, use CHAIN_TOPOLOGY_DAEMONS if others were not specified
