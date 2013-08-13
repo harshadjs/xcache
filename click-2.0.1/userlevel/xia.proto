@@ -20,7 +20,7 @@ enum XSocketCallType {
   XREMOVECHUNK =16;
 
   XREQUESTFAILED = 17;
-  XRESULT = 18;
+  //XRESULT = 18;
 
   XCHANGEAD = 19;
   XREADLOCALHOSTADDR = 20;
@@ -83,32 +83,43 @@ message X_Close_Msg {
 }
 
 message X_Connect_Msg {
+  enum ConnectStatus {
+    CONNECTING = 0;
+	CONNECTED = 1;
+	FAILED = 2;
+  }
+
   required string ddag = 1; // connect to destination dag
-  optional int32 status = 2; // Indicating the status (-1: connected, -1: failed)
+  optional ConnectStatus status = 2;
 }
 
 message X_Accept_Msg {
   optional string temp = 1; // currently not used
+  optional string remote_dag = 2;
 }
 
 message X_Sendto_Msg {
   required string ddag = 1; // dest dag
-  required bytes payload = 2; // data
+  optional bytes payload = 2; // data
 }
 
 message X_Send_Msg {
-  required bytes payload = 1; // data
+  optional bytes payload = 1; // data
 }
 
 message X_Recv_Msg {
   optional string temp = 1; // currently not used
-  optional string dag = 2;
-  optional bytes payload = 3;
+  optional bytes payload = 2;
+  optional int32 bytes_requested = 3;
+  optional int32 bytes_returned = 4; // necessary? this will be the result return code as well
 }
 
 message X_Recvfrom_Msg {
   optional string temp = 1; // currently not used
-  optional bytes payload = 2;
+  optional string sender_dag = 2;
+  optional bytes payload = 3;
+  optional int32 bytes_requested = 4;
+  optional int32 bytes_returned = 5; // necessary? this will be the result return code as well
 }
 
 message X_Setsockopt_Msg {
@@ -157,9 +168,8 @@ message X_Removechunk_Msg {
 }
 
 message X_Result_Msg {
-	required XSocketCallType type = 1; // XIA Socket call type
-	required int32 return_code = 2;	// same as a normal socket return code
-	optional int32 err_code = 3;	// if ret_code is -1, contains related errno value
+	optional int32 return_code = 1;	// same as a normal socket return code
+	optional int32 err_code = 2;	// if ret_code is -1, contains related errno value
 }
 
 message X_Requestfailed_Msg {

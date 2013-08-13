@@ -32,7 +32,7 @@
 /*!
 ** @brief receives datagram data on an Xsocket.
 **
-** Xrecvfrom() retrieves data from an Xsocket of type XSOCK_DGRAM. Unlike the 
+** Xrecvfrom() retrieves data from an Xsocket of type XSOCK_DGRAM. Unlike the
 ** standard recvfrom API, it will not work with sockets of type XSOCK_STREAM.
 **
 ** XrecvFrom() does not currently have a non-blocking mode, and will block
@@ -42,7 +42,7 @@
 ** you may then call XrecvFrom() to get the data.
 **
 ** NOTE: in cases where more data is received than specified by the caller,
-** the excess data will be stored in the socket state structure and will 
+** the excess data will be stored in the socket state structure and will
 ** be returned from there rather than from Click. Once the socket state
 ** is drained, requests will be sent through to Click again.
 **
@@ -66,7 +66,6 @@ int Xrecvfrom(int sockfd, void *rbuf, size_t len, int flags,
 	struct sockaddr *addr, socklen_t *addrlen)
 {
     int numbytes;
-    char UDPbuf[MAXBUFLEN];
 
 	if (flags != 0) {
 		LOG("flags is not suppored at this time");
@@ -78,7 +77,7 @@ int Xrecvfrom(int sockfd, void *rbuf, size_t len, int flags,
 		LOG("null pointer!\n");
 		errno = EFAULT;
 		return -1;
-	}	
+	}
 
 	if (addr && *addrlen < sizeof(sockaddr_x)) {
 		LOG("addr is not large enough");
@@ -90,7 +89,9 @@ int Xrecvfrom(int sockfd, void *rbuf, size_t len, int flags,
 		LOGF("Socket %d must be a datagram socket", sockfd);
 		return -1;
 	}
-	
+
+	// FIXME: what should we do if the datagram socket is connected???
+
 	// see if we have bytes leftover from a previous Xrecv call
 	if ((numbytes = getSocketData(sockfd, (char *)rbuf, len)) > 0) {
 		// FIXME: we need to also have stashed away the sDAG and
@@ -98,24 +99,64 @@ int Xrecvfrom(int sockfd, void *rbuf, size_t len, int flags,
 		*addrlen = 0;
 		return numbytes;
 	}
-	
-	if ((numbytes = click_reply(sockfd, UDPbuf, sizeof(UDPbuf))) < 0) {
-		LOGF("Error retrieving recv data from Click: %s", strerror(errno));
-		return -1;
+
+
+	xia::XSocketMsg xsm;
+	unsigned seq;
+	const char *payload;
+	int paylen;
+	xia::X_Recvfrom_Msg *xrm;
+
+	// FIXME: do this the right way!
+	// click replies immediately right now, so the recvfrom on the API socket
+	// will always return immediately even if there is no data. Select won't
+	// make a difference because of this. Changes need to be made in click so
+	// that it doesn't fire back so rapidly.
+	// inserting a short delay for now, but this still means polling far too
+	// often.
+	while (1) {
+		//usleep(1000);
+		sleep(1);
+
+		xsm.set_type(xia::XRECVFROM);
+		seq = seqNo(sockfd);
+		xsm.set_sequence(seq);
+
+		xrm = xsm.mutable_x_recvfrom();
+		xrm->set_bytes_requested(len);
+
+		if (click_send(sockfd, &xsm) < 0) {
+			LOGF("Error talking to Click: %s", strerror(errno));
+			return -1;
+		}
+
+		xsm.Clear();
+
+		if ((numbytes = click_reply(sockfd, seq, &xsm)) < 0) {
+			LOGF("Error retrieving recv data from Click: %s", strerror(errno));
+			return -1;
+		}
+		xrm = xsm.mutable_x_recvfrom();
+		payload = xrm->payload().c_str();
+		paylen = xrm->bytes_returned();
+
+		if (paylen != 0) {
+			break;
+		}
 	}
 
-	std::string str(UDPbuf, numbytes);
-	xia::XSocketMsg xsm;
+//	xrm = xsm.mutable_x_recvfrom();
+//	const char *payload = xrm->payload().c_str();
 
-	xsm.ParseFromString(str);
+	xia::X_Result_Msg *r = xsm.mutable_x_result();
 
-	xia::X_Recv_Msg *msg = xsm.mutable_x_recv();
-	unsigned paylen = msg->payload().size();
-	const char *payload = msg->payload().c_str();
+	if (paylen < 0) {
+		errno = r->err_code();
 
-	if (paylen <= len)
+	} else if ((unsigned)paylen <= len) {
 		memcpy(rbuf, payload, paylen);
-	else {
+
+	} else {
 		// we got back more data than the caller requested
 		// stash the extra away for subsequent Xrecv calls
 		memcpy(rbuf, payload, len);
@@ -125,12 +166,13 @@ int Xrecvfrom(int sockfd, void *rbuf, size_t len, int flags,
 	}
 
 	if (addr) {
-		Graph g(msg->dag().c_str());
+		Graph g(xrm->sender_dag().c_str());
 
 		// FIXME: validate addr
 		g.fill_sockaddr((sockaddr_x*)addr);
 		*addrlen = sizeof(sockaddr_x);
 	}
+
 
     return paylen;
 }

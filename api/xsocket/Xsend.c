@@ -65,12 +65,14 @@ int Xsend(int sockfd, const void *buf, size_t len, int flags)
 		return -1;
 	}
 
+	// FIXME: add support for connected DGRAM sockets
+
 	if (validateSocket(sockfd, XSOCK_STREAM, EOPNOTSUPP) < 0) {
 		LOG("Xsend is only valid with stream sockets.");
 		return -1;
 	}
 
-	if (!isConnected(sockfd)) {
+	if (getConnState(sockfd) != CONNECTED) {
 		LOGF("Socket %d is not connected", sockfd);
 		errno = ENOTCONN;
 		return -1;
@@ -78,6 +80,9 @@ int Xsend(int sockfd, const void *buf, size_t len, int flags)
 
 	xia::XSocketMsg xsm;
 	xsm.set_type(xia::XSEND);
+	unsigned seq = seqNo(sockfd);
+	xsm.set_sequence(seq);
+	printf("seq # = %d\n", xsm.sequence());
 
 	xia::X_Send_Msg *x_send_msg = xsm.mutable_x_send();
 	x_send_msg->set_payload(buf, len);
@@ -87,18 +92,12 @@ int Xsend(int sockfd, const void *buf, size_t len, int flags)
 		LOGF("Error talking to Click: %s", strerror(errno));
 		return -1;
 	}
-#if 0
+
 	// process the reply from click
-	if ((rc = click_reply2(sockfd, &type)) < 0) {
-		LOGF("Error retreiving data from Click: %s", strerror(errno));
+	if ((rc = click_status(sockfd, seq)) < 0) {
+		LOGF("Error getting status from Click: %s", strerror(errno));
 		return -1;
 	}
 
-	if (type != xia::XSEND) {
-		LOGF("Expected type %d, got %d", xia::XSEND, type);
-		// what do we do in this case?
-		// we might have sent the data, but can't be sure
-	}
-#endif
 	return len;
 }
