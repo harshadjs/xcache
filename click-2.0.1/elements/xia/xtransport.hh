@@ -69,6 +69,8 @@ using namespace std;
 #define CACHE_PORT      3
 #define XHCP_PORT       4
 
+// TODO: Are we going to keep this convenient value?
+#define TCP_MSS_DEFAULT_XIA 1000
 
 /* TCP params from http://lxr.linux.no/linux+v3.10.2/include/net/tcp.h */
 
@@ -248,6 +250,7 @@ static const uint8_t	tcp_outflags[TCP_NSTATES] = {
 		TH_ACK,			/* 9, FIN_WAIT_2 */
 		TH_ACK,			/* 10, TIME_WAIT */
 	};	
+
 
 CLICK_DECLS
 
@@ -499,6 +502,54 @@ class XTRANSPORT : public Element {
 			uint32_t	seq;
 			uint32_t	time;
 		} rcvq_space;    
+
+
+		/* http://lxr.linux.no/linux-old+v2.4.20/include/net/tcp.h
+		 *
+		 * This is what the send packet queueing engine uses to pass
+		 * TCP per-packet control information to the transmission
+		 * code.  We also store the host-order sequence numbers in
+		 * here too.  This is 36 bytes on 32-bit architectures,
+		 * 40 bytes on 64-bit machines, if this grows please adjust
+		 * skbuff.h:skbuff->cb[xxx] size appropriately.
+		 */
+		struct tcp_skb_cb {
+			
+			uint32_t		seq;		/* Starting sequence number	*/
+			uint32_t		end_seq;	/* SEQ + FIN + SYN + datalen	*/
+			uint32_t		when;		/* used to compute rtt's	*/
+			uint8_t		flags;		/* TCP header flags.		*/
+
+			/* NOTE: These must match up to the flags byte in a
+			 *       real TCP header.
+			 */
+		#define TCPCB_FLAG_FIN		0x01
+		#define TCPCB_FLAG_SYN		0x02
+		#define TCPCB_FLAG_RST		0x04
+		#define TCPCB_FLAG_PSH		0x08
+		#define TCPCB_FLAG_ACK		0x10
+		#define TCPCB_FLAG_URG		0x20
+		#define TCPCB_FLAG_ECE		0x40
+		#define TCPCB_FLAG_CWR		0x80
+
+			uint8_t		sacked;		/* State flags for SACK/FACK.	*/
+		#define TCPCB_SACKED_ACKED	0x01	/* SKB ACK'd by a SACK block	*/
+		#define TCPCB_SACKED_RETRANS	0x02	/* SKB retransmitted		*/
+		#define TCPCB_LOST		0x04	/* SKB is lost			*/
+		#define TCPCB_TAGBITS		0x07	/* All tag bits			*/
+
+		#define TCPCB_EVER_RETRANS	0x80	/* Ever retransmitted frame	*/
+		#define TCPCB_RETRANS		(TCPCB_SACKED_RETRANS|TCPCB_EVER_RETRANS)
+
+		#define TCPCB_URG		0x20	/* Urgent pointer advenced here	*/
+
+		#define TCPCB_AT_TAIL		(TCPCB_URG)
+
+			uint32_t		ack_seq;	/* Sequence number ACK'd	*/
+		};
+
+		struct tcp_skb_cb tcp_cb[MAX_SEND_WIN_SIZE];
+
     } ;
 
 
@@ -542,6 +593,8 @@ class XTRANSPORT : public Element {
     WritablePacket* copy_cid_response_packet(Packet *, struct sock *);
 
     char *random_xid(const char *type, char *buf);
+    void tcp_set_state(struct sock *sk, int state);
+
 
 	bool should_buffer_received_packet(WritablePacket *p, sock *sk);
 	void add_packet_to_recv_buf(WritablePacket *p, sock *sk);

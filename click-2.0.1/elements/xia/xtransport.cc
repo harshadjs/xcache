@@ -180,8 +180,8 @@ XTRANSPORT::run_timer(Timer *timer)
 					WritablePacket *ppp = WritablePacket::make (256, str.c_str(), str.length(), 0);
 
 					if (DEBUG)
-						//click_chatter("Timer: Sent packet to socket with port %d", _sport);
-                        output(API_PORT).push(UDPIPPrep(ppp, _sport));
+						click_chatter("Timer: Sent packet to socket with port %d", _sport);
+                    output(API_PORT).push(UDPIPPrep(ppp, _sport));
 				}
 
 			} else if (sk->dataack_waiting == true && sk->expiry <= now ) {
@@ -615,6 +615,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 		return;
 
 	} else if (thdr.type() == TransportHeader::XSOCK_STREAM) {
+		click_chatter("STREAM TIME");
 
 	/* =========================================================
 	 * TCP input
@@ -887,7 +888,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 		}
 
 	} else if (thdr.type() == TransportHeader::XSOCK_DGRAM) {
-
+		click_chatter("DGRAM TIME");
 		_dport = XIDtoPort.get(_destination_xid);
 		sock *sk = portToSock.get_pointer(_dport);
 
@@ -1445,14 +1446,20 @@ void XTRANSPORT::Xclose(unsigned short _sport)
 
 void XTRANSPORT::Xconnect(unsigned short _sport)
 {
+
+	/* ===============================================================
+	 * tcp_v4_connect()
+	 * http://lxr.linux.no/linux-old+v2.4.20/net/ipv4/tcp_ipv4.c : 751
+	 * TCP/IP Arch. Design & Impl pg 167
+	 * =============================================================== */
+
+	int tmp;
+	int err;
+
 	//click_chatter("Xconect: connecting %d\n", _sport);
 
-	//isConnected=true;
-	//String dest((const char*)p_in->data(),(const char*)p_in->end_data());
-	//click_chatter("\nconnect to %s, length=%d\n",dest.c_str(),(int)p_in->length());
-
+	// Obtain destination DAG from API
 	xia::X_Connect_Msg *x_connect_msg = xia_socket_msg.mutable_x_connect();
-
 	String dest(x_connect_msg->ddag().c_str());
 
 	//String sdag_string((const char*)p_in->data(),(const char*)p_in->end_data());
@@ -1461,13 +1468,14 @@ void XTRANSPORT::Xconnect(unsigned short _sport)
 	XIAPath dst_path;
 	dst_path.parse(dest);
 
+	// TODO: Any sanity check on ddag, length?
+
 	sock *sk = portToSock.get_pointer(_sport);
 	//click_chatter("connect %d %x",_sport, sk);
 
 	if(!sk) {
-		//click_chatter("Create DAGINFO connect %d %x",_sport, sk);
-		//No local SID bound yet, so bind ephemeral one
-		sk = new sock();
+		//click_chatter("Create sockinfo connect %d %x",_sport, sk);
+		sk = new sock();  // Calling Xconnect without Xsocket. Should fail?
 	}
 
 	sk->dst_path = dst_path;
@@ -1483,16 +1491,29 @@ void XTRANSPORT::Xconnect(unsigned short _sport)
 	sk->num_connect_tries++; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
 
 	String str_local_addr = _local_addr.unparse_re();
-	//String dagstr = sk->src_path.unparse_re();
 
-	/* Use src_path set by Xbind() if exists */
+	// TODO: Error if dest addr is of type multicast/broadcast. Do we need this?
+	
+	// TODO: If there's saved recent timestamp. Init ts_recent to the saved value
+
+	// TODO: tp->mss_clamp = TCP_MSS_DEFAULT; What is this?
+
+	/* Socket identity is still unknown (sSID may be zero).
+	 * However we set state to SYN-SENT and not releasing socket
+	 * lock select source port, enter ourselves into the hash tables and
+	 * complete initalization after this.
+	 */
+	tcp_set_state(sk, TCP_SYN_SENT);
+
+	// TODO: Bind source SID for a connect operation and hash it. Just generate random SID for now
+	//err = tcp_v4_hash_connect(sk);
+	//if (err)
+	//	goto failure;
+
+	/* Generate random SID. Use src_path set by Xbind() if exists */
 	if(sk->sdag.length() == 0) {
 		char xid_string[50];
 		random_xid("SID", xid_string);
-
-//		String rand(click_random(1000000, 9999999));
-//		String xid_string = "SID:20000ff00000000000000000000000000" + rand;
-//		str_local_addr = str_local_addr + " " + xid_string; //Make source DAG _local_addr:SID
 		str_local_addr = str_local_addr + " " + xid_string; //Make source DAG _local_addr:SID
 		sk->src_path.parse_re(str_local_addr);
 	}
@@ -1501,27 +1522,73 @@ void XTRANSPORT::Xconnect(unsigned short _sport)
 	sk->last = LAST_NODE_DEFAULT;
 	sk->hlim = hlim.get(_sport);
 
-	XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
-	XID destination_xid = sk->dst_path.xid(sk->dst_path.destination_node());
+	// TODO: Generate secure TCP sequence number based on quaduplet, system time, random num
+	//        Refer to TCP/IP Arch. Design & Impl pg 167
 
-	XIDpair xid_pair;
-	xid_pair.set_src(source_xid);
-	xid_pair.set_dst(destination_xid);
+	//if (!tp->write_seq)
+	//	tp->write_seq = secure_tcp_sequence_number(sk->saddr, sk->daddr,
+	//						   sk->sport, usin->sin_port);
+	//sk->protinfo.af_inet.id = tp->write_seq^jiffies;
 
-	// Map the src & dst XID pair to source port
-	//printf("setting pair to port1 %d\n", _sport);
+	sk->write_seq = 0;
 
-	XIDpairToPort.set(xid_pair, _sport);
+	/* ===============================================================
+	 * tcp_connect()
+	 * http://lxr.linux.no/linux-old+v2.4.20/net/ipv4/tcp_output.c: 1212
+	 * TCP/IP Arch. Design & Impl pg 174
+	 * =============================================================== */
 
-	// Map the source XID to source port
-	XIDtoPort.set(source_xid, _sport);
-	addRoute(source_xid);
+	// tcp_connect_init(sk) equivalent
 
-	// click_chatter("XCONNECT: set %d %x",_sport, sk);
+	// TODO: Path MTU, tcp_sync_mss, tcp_initialize_rcv_mss
+	sk->advmss = TCP_MSS_DEFAULT_XIA;
+	sk->max_window = 0;
 
-	// Prepare SYN packet
+	// TODO: This involves lots of calculation?
+	/*tcp_select_initial_window(tcp_full_space(sk),
+				  tp->advmss - (tp->ts_recent_stamp ? tp->tcp_header_len - sizeof(struct tcphdr) : 0),
+				  &tp->rcv_wnd,
+				  &tp->window_clamp,
+				  sysctl_tcp_window_scaling,
+				  &tp->rcv_wscale);*/
+	int init_cwnd = TCP_INIT_CWND;
+	sk->rcv_wnd = init_cwnd * sk->advmss;
 
-	//Add XIA headers
+	sk->rcv_ssthresh = sk->rcv_wnd;
+
+	//sk->err = 0;
+	//sk->done = 0;
+	sk->snd_wnd = 0;
+	sk->snd_wl1 = 0; // TODO: recheck this
+	sk->snd_una = sk->write_seq; 
+	sk->snd_sml = sk->write_seq;
+	sk->rcv_nxt = 0;
+	sk->rcv_wup = 0;
+	sk->copied_seq = 0;
+
+	sk->rto = TCP_TIMEOUT_INIT;
+	sk->retransmits = 0;
+
+	// Prepare SYN header info (is this necessary?)
+
+	//tcp_cb[???].flags = TCPCB_FLAG_SYN;
+	//tcp_cb[???].sacked = 0;
+	//tcp_cb[???].csum = 0;
+	//tcp_cb[???].seq = sk->write_seq++;
+	//tcp_cb[???].end_seq = sk->write_seq;
+	int pre_write_seq = sk->write_seq++;
+
+	sk->snd_nxt = sk->write_seq;
+	sk->pushed_seq = sk->write_seq;
+
+	//tcp_cb[???].when = tcp_time_stamp;
+	//sk->retrans_stamp = tcp_cb[???]->when;
+	
+	sk->packets_out++;
+	
+	// Create SYN packet (tcp_transmit_skb equivalent)
+	
+	// XIP headers
 	XIAHeaderEncap xiah;
 	xiah.set_nxt(CLICK_XIA_NXT_TRN);
 	xiah.set_last(LAST_NODE_DEFAULT);
@@ -1529,13 +1596,10 @@ void XTRANSPORT::Xconnect(unsigned short _sport)
 	xiah.set_dst_path(dst_path);
 	xiah.set_src_path(sk->src_path);
 
-	//click_chatter("Sent packet to network");
 	const char* dummy = "Connection_request";
 	WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 20);
-
 	WritablePacket *p = NULL;
-
-	TransportHeaderEncap *thdr = TransportHeaderEncap::MakeSYNHeader( 0, -1); // #seq, #ack
+	TransportHeaderEncap *thdr = TransportHeaderEncap::MakeSYNHeader( pre_write_seq, sk->rcv_nxt); // #seq, #ack
 
 	p = thdr->encap(just_payload_part);
 
@@ -1546,10 +1610,28 @@ void XTRANSPORT::Xconnect(unsigned short _sport)
 
 	delete thdr;
 
-	// Set timer
+	XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
+	XID destination_xid = sk->dst_path.xid(sk->dst_path.destination_node());
+
+	XIDpair xid_pair;
+	xid_pair.set_src(source_xid);
+	xid_pair.set_dst(destination_xid);
+
+	// Map the src & dst XID pair to source port
+	XIDpairToPort.set(xid_pair, _sport);
+
+	// Map the source XID to source port
+	XIDtoPort.set(source_xid, _sport);
+	addRoute(source_xid);
+
+	// click_chatter("XCONNECT: set %d %x",_sport, sk);
+	
+	/* Timer for repeating the SYN until an answer. */
+	//tcp_reset_xmit_timer(sk, TCP_TIME_RETRANS, tp->rto); equivalent
+	
 	sk->timer_on = true;
 	sk->synack_waiting = true;
-	sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+	sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);	// TODO: use sk->rto?
 
 	if (! _timer.scheduled() || _timer.expiry() >= sk->expiry )
 		_timer.reschedule_at(sk->expiry);
@@ -1568,6 +1650,15 @@ void XTRANSPORT::Xconnect(unsigned short _sport)
 
 	// (for Ack purpose) Reply with a packet with the destination port=source port
 	//output(API_PORT).push(UDPIPPrep(p_in,_sport));
+
+	if (err)
+	{
+		tcp_set_state(sk, TCP_CLOSE);
+		// TODO: reset destination in sk
+		return err;
+	}
+
+	return 0;
 }
 
 void XTRANSPORT::Xaccept(unsigned short _sport)
