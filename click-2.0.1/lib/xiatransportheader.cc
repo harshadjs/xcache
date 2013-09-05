@@ -12,6 +12,7 @@
 #endif
 CLICK_DECLS
 
+
 //TransportHeaderEncap::TransportHeaderEncap(char type, char pkt_info, uint32_t seq_num, uint32_t ack_num, uint16_t length) {
 TransportHeaderEncap::TransportHeaderEncap(char type, 
 										 uint32_t seq_num, 
@@ -21,6 +22,7 @@ TransportHeaderEncap::TransportHeaderEncap(char type,
 										 uint16_t checksum, 
 										 uint32_t window, 
 										 uint32_t timestamp) {
+
     this->map()[TransportHeader::TYPE]= String((const char*)&type, sizeof(type));
     this->map()[TransportHeader::SEQ_NUM]= String((const char*)&seq_num, sizeof(seq_num));
     this->map()[TransportHeader::ACK_NUM]= String((const char*)&ack_num, sizeof(ack_num));        

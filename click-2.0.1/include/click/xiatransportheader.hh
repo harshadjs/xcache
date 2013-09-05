@@ -22,6 +22,7 @@ class TransportHeader : public XIAGenericExtHeader { public:
     
     bool exists(uint8_t key) { return (_map.find(key)!=_map.end()); }
     
+
     //uint8_t pkt_info() { if (!exists(PKT_INFO)) return 0 ; return *(const uint8_t*)_map[PKT_INFO].data();}; 
     //uint16_t length() { if (!exists(LENGTH)) return 0; return *(const uint16_t*)_map[LENGTH].data();};  
 

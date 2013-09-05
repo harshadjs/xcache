@@ -27,6 +27,26 @@
 
 #define XID_CHARS (XID_SIZE * 2)
 
+// FIXME: do this smarter
+// this should be larger than the size of the maximum amount XIA can transfer, but smaller than localhost MTU
+// optimally, XIA_MAXBUF would be calculated based off of this and the maximum size of a protobuf message
+#define XIA_INTERNAL_BUFSIZE	(16 * 1024)
+
+/*!
+* @brief Prints some debug information
+*
+* @param sock
+*/
+void debug(int sock) {
+	struct sockaddr_in my_addr;
+	socklen_t len = sizeof(my_addr);
+	if(getsockname(sock, (struct sockaddr *)&my_addr, &len) < 0) {
+		printf("Error retrieving socket's UDP port: %s", strerror(errno));
+	}
+	
+	printf("[ sock %d/%d, thread %p ]\t", sock, ((struct sockaddr_in)my_addr).sin_port, (void*)pthread_self());
+}
+
 /*!
 ** @brief Finds the root of the source tree
 **
@@ -85,15 +105,20 @@ int validateSocket(int sock, int stype, int err)
 int click_send(int sockfd, xia::XSocketMsg *xsm)
 {
 	int rc = 0;
-	struct sockaddr_in sa;
+	static int initialized = 0;
+	static struct sockaddr_in sa;
 
 	assert(xsm);
 
-	// TODO: cache these so we don't have to set everything up each time we
-	// are called
-	sa.sin_family = PF_INET;
-	sa.sin_addr.s_addr = inet_addr("127.0.0.1");
-	sa.sin_port = htons(atoi(CLICKPORT));
+	// FIXME: have I created a race condition here?
+	if (!initialized) {
+
+		sa.sin_family = PF_INET;
+		sa.sin_addr.s_addr = inet_addr("127.0.0.1");
+		sa.sin_port = htons(atoi(CLICKPORT));
+
+		initialized = 1;
+	}
 
 	std::string p_buf;
 	xsm->SerializeToString(&p_buf);
@@ -101,6 +126,8 @@ int click_send(int sockfd, xia::XSocketMsg *xsm)
 	int remaining = p_buf.size();
 	const char *p = p_buf.c_str();
 	while (remaining > 0) {
+
+//LOGF("sending to click: seq: %d type: %d", xsm->sequence(), xsm->type());
 		setWrapped(sockfd, TRUE);
 		rc = sendto(sockfd, p, remaining, 0, (struct sockaddr *)&sa, sizeof(sa));
 		setWrapped(sockfd, FALSE);
@@ -133,6 +160,10 @@ int click_get(int sock, unsigned seq, char *buf, unsigned buflen, xia::XSocketMs
 {
 	int rc;
 
+	// FIXME: if someone caches our packet as we start to do the recv, we'll block forever
+	// may need to implement select so that we re-loop frequently so we can pick up our
+	// cached packet
+
 	while (1) {
 		// see if another thread received and cached our packet
 		if ((rc = getCachedPacket(sock, seq, buf, buflen)) > 0) {
@@ -142,6 +173,22 @@ int click_get(int sock, unsigned seq, char *buf, unsigned buflen, xia::XSocketMs
 			break;
 
 		} else {
+
+			struct timeval tv;
+			fd_set fds;
+			FD_ZERO(&fds);
+			FD_SET(sock, &fds);
+			tv.tv_sec = 0;
+			tv.tv_usec = 10000;
+			rc = select(sock+1, &fds, NULL, NULL, &tv);
+			if (rc == 0)
+				continue;
+			else if (rc < 0) {
+				if (errno == EINTR)
+					continue;
+				LOG("select failed");
+				return -1;
+			}
 
 			setWrapped(sock, TRUE);
 			rc = recvfrom(sock, buf, buflen - 1 , 0, NULL, NULL);
@@ -174,7 +221,7 @@ int click_get(int sock, unsigned seq, char *buf, unsigned buflen, xia::XSocketMs
 
 int click_reply(int sock, unsigned seq, xia::XSocketMsg *msg)
 {
-	char buf[XIA_MAXBUF];
+	char buf[XIA_INTERNAL_BUFSIZE];
 	unsigned buflen = sizeof(buf);
 
 	return click_get(sock, seq, buf, buflen, msg);
@@ -182,7 +229,7 @@ int click_reply(int sock, unsigned seq, xia::XSocketMsg *msg)
 
 int click_status(int sock, unsigned seq)
 {
-	char buf[XIA_MAXBUF];
+	char buf[XIA_INTERNAL_BUFSIZE];
 	unsigned buflen = sizeof(buf);
 	int rc;
 	xia::XSocketMsg msg;
