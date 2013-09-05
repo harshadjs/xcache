@@ -59,10 +59,10 @@ int _connStream(int sockfd, const sockaddr *addr, socklen_t addrlen)
 {
 	int rc;
 
-	if (addr->sa_family != AF_XIA) {
-		errno = EAFNOSUPPORT;
-		return -1;
-	}
+	//if (addr->sa_family != AF_XIA) {
+	//	errno = EAFNOSUPPORT;
+	//	return -1;
+	//}
 
 	// FIXME: check addrlen here. check against wrapper, there were problems with it not setting length correctly
 
@@ -95,6 +95,7 @@ int _connStream(int sockfd, const sockaddr *addr, socklen_t addrlen)
 	}
 
 	setConnState(sockfd, CONNECTING);
+	printf("wowoowow\n");
 
 	rc = click_status(sockfd, seq);
 	if (rc == -1) {

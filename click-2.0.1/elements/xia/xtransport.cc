@@ -133,6 +133,208 @@ char *XTRANSPORT::random_xid(const char *type, char *buf)
 	return buf;
 }
 
+/*
+** TCP helpers 
+*/
+
+void XTRANSPORT::tcp_set_state(sock *sk, int state)
+{
+	int oldstate = sk->sk_state;
+
+	// TODO: what are these for?
+	switch (state) {
+	case TCP_ESTABLISHED:
+		if (oldstate != TCP_ESTABLISHED)
+			//TCP_INC_STATS(TcpCurrEstab);
+		break;
+
+	case TCP_CLOSE:
+		//sk->prot->unhash(sk);
+		//if (sk->prev && !(sk->userlocks&SOCK_BINDPORT_LOCK))
+		//	tcp_put_port(sk);
+		/* fall through */
+							click_chatter("FOO");
+	default:
+		//if (oldstate==TCP_ESTABLISHED)
+		//	tcp_statistics[smp_processor_id()*2+!in_softirq()].TcpCurrEstab--;
+							click_chatter("FOO");
+	}
+
+	/* Change state AFTER socket is unhashed to avoid closed
+	 * socket sitting in hash tables.
+	 */
+	sk->sk_state = state;
+}
+
+int tcp_may_raise_cwnd(sock *tp, int flag)
+{
+	return (!(flag & FLAG_ECE) || tp->snd_cwnd < tp->snd_ssthresh) &&
+		!((1<<tp->ca_state)&(TCPF_CA_Recovery|TCPF_CA_CWR));
+}
+
+/* This is Jacobson's slow start and congestion avoidance. 
+ * SIGCOMM '88, p. 328.
+ */
+void tcp_cong_avoid(sock *tp)
+{
+        if (tp->snd_cwnd <= tp->snd_ssthresh) {
+                /* In "safe" area, increase. */
+		if (tp->snd_cwnd < tp->snd_cwnd_clamp)
+			tp->snd_cwnd++;
+	} else {
+                /* In dangerous area, increase slowly.
+		 * In theory this is tp->snd_cwnd += 1 / tp->snd_cwnd
+		 */
+		if (tp->snd_cwnd_cnt >= tp->snd_cwnd) {
+			if (tp->snd_cwnd < tp->snd_cwnd_clamp)
+				tp->snd_cwnd++;
+			tp->snd_cwnd_cnt=0;
+		} else
+			tp->snd_cwnd_cnt++;
+        }
+	tp->snd_cwnd_stamp = tcp_time_stamp;
+}
+
+/* Check that window update is acceptable.
+ * The function assumes that snd_una<=ack<=snd_next.
+ */
+int tcp_may_update_window(sock *tp, uint32_t ack, uint32_t ack_seq, uint32_t nwin)
+{
+	return (after(ack, tp->snd_una) ||
+		after(ack_seq, tp->snd_wl1) ||
+		(ack_seq == tp->snd_wl1 && nwin > tp->snd_wnd));
+}
+
+/* Update our send window.
+ *
+ * Window update algorithm, described in RFC793/RFC1122 (used in linux-2.2
+ * and in FreeBSD. NetBSD's one is even worse.) is wrong.
+ */
+static int tcp_ack_update_window(sock *sk, TransportHeader *thdr, uint32_t ack, uint32_t ack_seq)
+{
+	int flag = 0;
+	uint32_t nwin = thdr->window();
+
+	if (tcp_may_update_window(tp, ack, ack_seq, nwin)) {
+		flag |= FLAG_WIN_UPDATE;
+		tp->snd_wl1 = ack_seq;	//tcp_update_wl(tp, ack, ack_seq);
+
+		if (tp->snd_wnd != nwin) {
+			tp->snd_wnd = nwin;
+
+			/* Note, it is the only place, where
+			 * fast path is recovered for sending TCP.
+			 */
+			tcp_fast_path_check(sk, tp);
+
+			if (nwin > tp->max_window) {
+				tp->max_window = nwin;
+				tcp_sync_mss(sk, tp->pmtu_cookie);
+			}
+		}
+	}
+
+	tp->snd_una = ack;
+
+	return flag;
+}
+
+int tcp_ack(sock *sk, TransportHeader *thdr, int flag)
+{
+	sock *tp = sk;
+	uint32_t prior_snd_una = tp->snd_una;
+	uint32_t ack_seq = thdr->seq_num();
+	uint32_t ack = thdr->ack_num();
+	uint32_t prior_in_flight;
+	int prior_packets;
+
+	/* If the ack is newer than sent or older than previous acks
+	 * then we can probably ignore it.
+	 */
+	if (after(ack, tp->snd_nxt))
+		goto uninteresting_ack;
+
+	if (before(ack, prior_snd_una))
+		goto old_ack;
+
+	if (!(flag&FLAG_SLOWPATH) && after(ack, prior_snd_una)) {
+		/* Window is constant, pure forward advance.
+		 * No more checks are required.
+		 * Note, we use the fact that SND.UNA>=SND.WL2.
+		 */
+		tp->snd_wl1 = ack_seq;
+		tp->snd_una = ack;
+		flag |= FLAG_WIN_UPDATE;
+
+	} else {
+		/* TODO: What is end_seq for? SACK?
+		if (ack_seq != TCP_SKB_CB(skb)->end_seq)
+			flag |= FLAG_DATA;
+		else
+			NET_INC_STATS_BH(TCPPureAcks);
+			*/
+
+		flag |= tcp_ack_update_window(sk, tp, skb, ack, ack_seq);
+
+		//if (TCP_SKB_CB(skb)->sacked)
+		//	flag |= tcp_sacktag_write_queue(sk, skb, prior_snd_una);
+
+		//if (TCP_ECN_rcv_ecn_echo(tp, skb->h.th))
+		//	flag |= FLAG_ECE;
+	}
+
+	/* We passed data and got it acked, remove any soft error
+	 * log. Something worked...
+	 */
+	sk->err_soft = 0;
+	tp->rcv_tstamp = Timestamp::now().sec();
+	if ((prior_packets = tp->packets_out) == 0)
+		goto no_queue;
+
+	prior_in_flight = tp->packets_out - tp->left_out + tp->retrans_out;
+
+	/* TODO: Remove acknowledged frames from the retransmission queue. */
+	//flag |= tcp_clean_rtx_queue(sk);
+
+	if (tcp_ack_is_dubious(tp, flag)) {
+		/* Advanve CWND, if state allows this. */
+		if ((flag&FLAG_DATA_ACKED) && prior_in_flight >= tp->snd_cwnd &&
+		    tcp_may_raise_cwnd(tp, flag))
+			tcp_cong_avoid(tp);
+		tcp_fastretrans_alert(sk, prior_snd_una, prior_packets, flag);
+	} else {
+		if ((flag&FLAG_DATA_ACKED) && prior_in_flight >= tp->snd_cwnd)
+			tcp_cong_avoid(tp);
+	}
+
+	//if ((flag & FLAG_FORWARD_PROGRESS) || !(flag&FLAG_NOT_DUP))
+	//	dst_confirm(sk->dst_cache);
+
+	return 1;
+
+no_queue:
+	tp->probes_out = 0;
+
+	/* If this ack opens up a zero window, clear backoff.  It was
+	 * being used to time the probes, and is probably far higher than
+	 * it needs to be for normal retransmission.
+	 */
+	if (tp->send_head)
+		tcp_ack_probe(sk);
+	return 1;
+
+old_ack:
+	//if (TCP_SKB_CB(skb)->sacked)
+	//	tcp_sacktag_write_queue(sk, skb, prior_snd_una);
+
+uninteresting_ack:
+	SOCK_DEBUG(sk, "Ack %u out of %u:%u\n", ack, tp->snd_una, tp->snd_nxt);
+	return 0;
+}
+
+
+
+
 void
 XTRANSPORT::run_timer(Timer *timer)
 {
@@ -154,28 +356,27 @@ XTRANSPORT::run_timer(Timer *timer)
 
 		// check if pending
 		if (sk->timer_on == true) {
-			// check if synack waiting
-			if (sk->synack_waiting == true && sk->expiry <= now ) {
-				//click_chatter("Timer: synack waiting\n");
+			// check if we are waiting for SYN-ACK
+			if (sk->sk_state == TCP_SYN_SENT && sk->expiry <= now ) {
+				click_chatter("Timer: SYN_SENT\n");
 
 				if (sk->num_connect_tries <= MAX_CONNECT_TRIES) {
 
-					//click_chatter("Timer: SYN RETRANSMIT! \n");
+					click_chatter("Timer: SYN RETRANSMIT! \n");
 					copy = copy_packet(sk->syn_pkt, sk);
 					// retransmit syn
 					XIAHeader xiah(copy);
 					// printf("Timer: (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (char *)xiah.payload(), xiah.plen());
 					output(NETWORK_PORT).push(copy);
 
-					sk->timer_on = true;
-					sk->synack_waiting = true;
 					sk->expiry = now + Timestamp::make_msec(_ackdelay_ms);
 					sk->num_connect_tries++;
 
 				} else {
 					// Stop sending the connection request & Report the failure to the application
+					click_chatter("Too many SYN attempts. Closing connection");
 					sk->timer_on = false;
-					sk->synack_waiting = false;
+					sk->sk_state = TCP_CLOSE;
 
 					String str = String("^Connection-failed^");
 					WritablePacket *ppp = WritablePacket::make (256, str.c_str(), str.length(), 0);
@@ -794,116 +995,421 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 		HashTable<unsigned short, bool>::iterator it1;
 		it1 = portToActive.find(_dport);
 
-		if(it1 != portToActive.end() ) {
+		if(it1 != portToActive.end() ) {	
+				// Found an active socket corresponding to this XID pair
 				sock *sk = portToSock.get_pointer(_dport);
 
+				/* ==================================================================
+				 * tcp_v4_do_rcv() 
+				 * http://lxr.linux.no/linux-old+v2.4.20/net/ipv4/tcp_ipv4.c: 1635
+				 * Handles incoming packet
+				 * ================================================================== */
+				if(sk->sk_state == TCP_ESTABLISHED) { /* Fast path */
+					// tcp_rcv_establish()
+
+				}
+
+				// TODO: checksum
+				// if(thdr.len() < thdr.doff() << 2 || tcp_checksum_complete(&thdr)) 
+				//    goto discard;
+
+				// TODO: What is this part for??? I'm confused
+				if(sk->sk_state == TCP_LISTEN) {
+					// sock *nsk = tcp_v4_hnd_req() Find socket that will handle this packet
+				}
+
+
+				/* =========================================================================================
+				 * tcp_rcv_state_process() 
+				 * http://lxr.linux.no/linux-old+v2.4.20/net/ipv4/tcp_input.c: 3680
+				 * TCP/IP Arch. Design & Impl pg 157, 
+				 * http://www.6test.edu.cn/~lujx/linux_networking/0131777203_ch24lev1sec3.html#ch24lev1sec3
+				 * Handles connection management/ state transition
+				 * ========================================================================================= */
+
+				sk->saw_tstamp = 0;
 				switch(sk->sk_state)
 				{
 					case TCP_CLOSE:
-						click_chatter("TCP_CLOSE");
-						//goto discard;
-				// ....
-				};
-		}
+						goto discard;
+
+					case TCP_LISTEN:	// Server after calling xbind()
+						if(thdr.ack())
+							goto send_reset;
+
+						if(thdr.rst())
+							goto discard;
+
+						if(thdr.syn()) {
+							//if(tp->af_specific->conn_request(sk, skb) < 0)	
+							//	goto send_reset;
+
+							/* =========================================================================================
+							 * tcp_v4_conn_request() 
+							 * http://lxr.linux.no/linux-old+v2.4.20/net/ipv4/tcp_ipv4.c: 1383
+							 * Server's listening socket handles incoming SYN
+							 * ========================================================================================= */
+
+							// Check if SYNQ is full or if thdr.timestamp() == 0 then drop
+
+							// Create new open request and add to SYNQ
+
+							sk->mss_clamp = 536;
+							//sk->user_mss = sk->tp_pinfo.af_tcp.user_mss;
+
+							// TODO: What is this for?
+							if (sk->saw_tstamp && sk->rcv_tsval == 0) {
+								/* Some OSes (unknown ones, but I see them on web server, which
+								 * contains information interesting only for windows'
+								 * users) do not send their stamp in SYN. It is easy case.
+								 * We simply do not advertise TS support.
+								 */
+								sk->saw_tstamp = 0;
+								sk->tstamp_ok = 0;
+							}
+							sk->tstamp_ok = sk->saw_tstamp;
+
+							// TODO: isn (initial seq num) stuffs (+isn cookies)
+
+							// XSP's SYN handling
+
+							//printf("syn dport = %d\n", _dport);
+							// Connection request from client...
+
+							// First, check if this request is already in the pending queue
+							XIDpair xid_pair;
+							xid_pair.set_src(_destination_xid);
+							xid_pair.set_dst(_source_xid);
+
+							HashTable<XIDpair , bool>::iterator it;
+							it = XIDpairToConnectPending.find(xid_pair);
+
+							// FIXME:
+							// XIDpairToConnectPending never gets cleared, and will cause problems if matching XIDs
+							// were used previously. Commenting out the check for now. Need to look into whether
+							// or not we can just get rid of this logic? probably neede for retransmit cases
+							// if needed, where should it be cleared???
+				//			if (1) {
+
+							// pending_connection_buf is basically SYN Queue
+							if (it == XIDpairToConnectPending.end()) {
+								// if this is new request, put it in the queue
+
+								// Todo: 1. prepare new sock and store it
+								//	 2. send SYNACK to client
+
+								//1. Prepare new sock for this connection
+								// TODO: do we need to malloc this?
+								sock sk;
+								sk.port = -1; // just for now. This will be updated via Xaccept call
+
+								sk.sock_type = XSOCKET_STREAM; 
+
+								sk.dst_path = src_path;
+								sk.src_path = dst_path;
+								sk.isConnected = true;
+								sk.initialized = true;
+								sk.nxt = LAST_NODE_DEFAULT;
+								sk.last = LAST_NODE_DEFAULT;
+								sk.hlim = HLIM_DEFAULT;
+								sk.seq_num = 0;
+								sk.ack_num = 0;
+								memset(sk.send_buffer, 0, sk.send_buffer_size * sizeof(WritablePacket*));
+								memset(sk.recv_buffer, 0, sk.recv_buffer_size * sizeof(WritablePacket*));
+
+							/* =========================================================
+							 * Initialize TCP variables
+							 * http://lxr.linux.no/linux+v3.10.2/net/ipv4/tcp.c : 372
+							 * ========================================================= */
+								//tcp_init_xmit_timers(sk);
+								
+								// TODO: Linux use tp for tcp_sock, sk for sock, icsk for inet_connection_sock.
+								// 		 We currently only have sock. Should probably rename tp, icsk to sk later
+								sock *tp = &sk;	 
+								//sock *icsk = &sk;
+
+								//icsk->icsk_rto = TCP_TIMEOUT_INIT;
+								tp->mdev = TCP_TIMEOUT_INIT;
+
+								/* So many TCP implementations out there (incorrectly) count the
+								 * initial SYN frame in their delayed-ACK and congestion control
+								 * algorithms that we must have the following bandaid to talk
+								 * efficiently to them.  -DaveM
+								 */
+								tp->snd_cwnd = TCP_INIT_CWND;
+
+								/* See draft-stevens-tcpca-spec-01 for discussion of the
+								 * initialization of these values.
+								 */
+								tp->snd_ssthresh = TCP_INFINITE_SSTHRESH;
+								tp->snd_cwnd_clamp = ~0;
+								tp->mss_cache = TCP_MSS_DEFAULT;
+
+								//tp->reordering = sysctl_tcp_reordering;
+								//tcp_enable_early_retrans(tp);
+								//icsk->icsk_ca_ops = &tcp_init_congestion_ops;
+
+								tp->tsoffset = 0;
+
+								sk.sk_state = TCP_SYN_RECV;
+
+								pending_connection_buf.push(sk);
+
+								// Mark these src & dst XID pair
+								XIDpairToConnectPending.set(xid_pair, true);
+
+								//portToSock.set(-1, sk);	// just for now. This will be updated via Xaccept call
+
+							} else {
+								// If already in the pending queue, just send back SYNACK to the requester
+
+								// if this case is hit, we won't trigger the accept, and the connection will get be left
+								// in limbo. see above for whether or not we should even be checking.
+								// printf("%06d conn request already pending\n", _dport);
+							}
+
+
+							//2. send SYNACK to client
+							//Add XIA headers
+							XIAHeaderEncap xiah_new;
+							xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+							xiah_new.set_last(LAST_NODE_DEFAULT);
+							xiah_new.set_hlim(HLIM_DEFAULT);
+							xiah_new.set_dst_path(src_path);
+							xiah_new.set_src_path(dst_path);
+
+							const char* dummy = "Connection_granted";
+							WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+							WritablePacket *p = NULL;
+
+							xiah_new.set_plen(strlen(dummy));
+							//click_chatter("Sent packet to network");
+
+							TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader( 0, 0); // #seq, #ack
+							p = thdr_new->encap(just_payload_part);
+
+							thdr_new->update();
+							xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+							p = xiah_new.encap(p, false);
+
+							delete thdr_new;
+							//XIAHeader xiah1(p);
+							//String pld((char *)xiah1.payload(), xiah1.plen());
+							//printf("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
+							output(NETWORK_PORT).push(p);
+
+
+							// 3. Notify the api of SYN reception
+							//   Done below (via port#5005)
+
+							// Send SYNACK
+
+
+							goto discard;
+						}
+						goto discard;
+
+					case TCP_SYN_SENT:
+						//queued = tcp_rcv_synsent_state_process(sk, skb, th, len);
+
+				}
+
+				/* step 1: check sequence number. If a packet arrived out of order, then a DUPACK is returned and the packet is dropped. */
+				/*if (!tcp_sequence(tp, TCP_SKB_CB(skb)->seq, TCP_SKB_CB(skb)->end_seq)) {
+					if (!th->rst)
+						tcp_send_dupack(sk, skb);
+					goto discard;
+				}*/
+
+				/* step 2: check RST bit */
+				if(thdr.rst()) {
+					//TODO: tcp_reset(sk);
+					goto discard;
+				}
+
+				// If a timestamp is present in the segment header, the recent timestamp stored locally is updated.
+				// tcp_replace_ts_recent(tp, TCP_SKB_CB(skb)->seq);
+				if (sk->saw_tstamp && !after(thdr.seq_num(), sk->rcv_wup)) {
+					/* PAWS bug workaround wrt. ACK frames, the PAWS discard
+					 * extra check below makes sure this can only happen
+					 * for pure ACK frames.  -DaveM
+					 *
+					 * Not only, also it occurs for expired timestamps.
+					 */
+					if((int32_t)(sk->rcv_tsval - sk->ts_recent) >= 0 || Timestamp::now().sec() >= sk->ts_recent_stamp + TCP_PAWS_24DAYS) 
+					{
+						sk->ts_recent = sk->rcv_tsval;
+				        sk->ts_recent_stamp = Timestamp::now().sec();		// FIXME: is it ok to replace xtime.tv_sec with Timestamp::now().sec() ?
+				    }
+				}
+
+
+				/*	step 4:
+				 *
+				 *	Check for a SYN in window. If the SYN flag is set, but invalid due to the sequence number, the connection is reset and the packet is dropped.
+				 */
+				if (thdr.syn() && !before(thdr.seq_num(), sk->rcv_nxt)) {
+					// TODO: tcp_reset(sk);
+					goto send_reset;
+				}
+
+				/* step 5: check the ACK field */
+				if (thdr.ack()) {
+					int acceptable = tcp_ack(sk, &thdr, FLAG_SLOWPATH);	// TODO:
+
+					switch(sk->state) {
+					case TCP_SYN_RECV:	// Server waiting for the last ACK in 3-way handshake
+						if (acceptable) {
+							sk->copied_seq = sk->rcv_nxt;
+							//TODO: memory barrier? mb(); 
+							tcp_set_state(sk, TCP_ESTABLISHED);
+
+							/* Note, that this wakeup is only for marginal
+							 * crossed SYN case. Passively open sockets
+							 * are not waked up, because sk->sleep == NULL
+							 * and sk->socket == NULL.
+							 */
+							//if (sk->socket) {
+							//	sk_wake_async(sk,0,POLL_OUT);
+							//}
+
+							sk->snd_una = thdr.ack_num();
+							sk->snd_wnd = thdr.window();
+							sk->snd_wl1 = thdr.seq_num();
+
+							/* tcp_ack considers this ACK as duplicate
+							 * and does not calculate rtt.
+							 * Fix it at least with timestamps.
+							 */
+							if (sk->saw_tstamp && sk->rcv_tsecr && !sk->srtt) {
+								uint32_t seq_rtt;
+
+								/* RTTM Rule: A TSecr value received in a segment is used to
+								 * update the averaged RTT measurement only if the segment
+								 * acknowledges some new data, i.e., only if it advances the
+								 * left edge of the send window.
+								 *
+								 * See draft-ietf-tcplw-high-performance-00, section 3.3.
+								 * 1998/04/10 Andrey V. Savochkin <saw@msu.ru>
+								 *
+								 * Changed: reset backoff as soon as we see the first valid sample.
+								 * If we do not, we get strongly overstimated rto. With timestamps
+								 * samples are accepted even from very old segments: f.e., when rtt=1
+								 * increases to 8, we retransmit 5 times and after 8 seconds delayed
+								 * answer arrives rto becomes 120 seconds! If at least one of segments
+								 * in window is lost... Voila.	 			--ANK (010210)
+								 */
+								seq_rtt = Timestamp::now().jiffies() - sk->rcv_tsecr;	// FIXME: is it correct to replace tcp_time_stamp with Timestamp::now().jiffies()?
+								tcp_rtt_estimator(sk, seq_rtt);
+								tcp_set_rto(sk);
+								sk->backoff = 0;
+							}
+
+							if (sk->tstamp_ok)
+								sk->advmss -= TCPOLEN_TSTAMP_ALIGNED;
+
+							tcp_init_metrics(sk);
+							tcp_initialize_rcv_mss(sk);
+							tcp_init_buffer_space(sk);
+							//tcp_fast_path_on(tp); TODO: fast path on, pred flags
+						} else {
+							goto send_reset;
+						}
+						break;
+
+					case TCP_FIN_WAIT1:	// Client waiting for ACK of the sent FIN
+						if (sk->snd_una == sk->write_seq) {
+							tcp_set_state(sk, TCP_FIN_WAIT2);
+							//sk->shutdown |= SEND_SHUTDOWN;
+							//dst_confirm(sk->dst_cache);
+
+							// TODO: lingering close?
+							/*
+							if (!sk->dead) {
+								...
+							} else {
+								int tmo;
+								...
+								
+							}*/
+						}
+						break;
+
+					case TCP_CLOSING: // Special: Client got FIN from server after having sent FIN
+						if (sk->snd_una == sk->write_seq) {
+							//tcp_time_wait(sk, TCP_TIME_WAIT, 0); TODO:
+							goto discard;
+						}
+						break;
+
+					case TCP_LAST_ACK:
+						if (sk->snd_una == sk->write_seq) {
+							//tcp_update_metrics(sk); TODO: save metrics for this TCP session
+							tcp_done(sk);
+							goto discard;
+						}
+						break;
+					}
+				} else
+					goto discard;
+
+				/* step 6: check the URG bit */
+				//tcp_urg(sk, skb, th); TODO:
+
+				/* step 7: process the segment text */
+				switch (sk->state) {
+					case TCP_CLOSE_WAIT:
+					case TCP_CLOSING:
+					case TCP_LAST_ACK:
+						if (!before(thdr.seq_num(), sk->rcv_nxt))
+							break;
+					case TCP_FIN_WAIT1:
+					case TCP_FIN_WAIT2:
+						/* RFC 793 says to queue data in these states,
+						 * RFC 1122 says we MUST send a reset. 
+						 * BSD 4.4 also does reset.
+						 */
+						 /*
+						if (sk->shutdown & RCV_SHUTDOWN) {
+							if (TCP_SKB_CB(skb)->end_seq != TCP_SKB_CB(skb)->seq &&
+							    after(TCP_SKB_CB(skb)->end_seq - th->fin, sk->rcv_nxt)) {
+								NET_INC_STATS_BH(TCPAbortOnData);
+								tcp_reset(sk);
+								goto send_reset;							}
+						}*/
+						/* Fall through */
+					case TCP_ESTABLISHED: 
+						//TODO: process received data
+						//tcp_data_queue(sk, skb);
+						//queued = 1;
+						break;
+				}
+
+				// TODO: what is this?
+				/* tcp_data could move socket to TIME-WAIT */
+				if (sk->state != TCP_CLOSE) {
+					//tcp_data_snd_check(sk);
+					//tcp_ack_snd_check(sk);
+				}
+
+				discard:
+					return;
+
+
+				send_reset:
+					// TODO: send RST
+					return;
+		} // endif(it1 != portToActive.end() ) 
 		
 		/* =========================================================
 		 * Old XSP's way of handling incoming packet
 	 	 * ========================================================= */
-
+/*
 		//printf("stream socket dport = %d\n", _dport);
 		if (thdr.flags() == TransportHeader::SYN) {
-			//printf("syn dport = %d\n", _dport);
-			// Connection request from client...
-
-			// First, check if this request is already in the pending queue
-			XIDpair xid_pair;
-			xid_pair.set_src(_destination_xid);
-			xid_pair.set_dst(_source_xid);
-
-			HashTable<XIDpair , bool>::iterator it;
-			it = XIDpairToConnectPending.find(xid_pair);
-
-			// FIXME:
-			// XIDpairToConnectPending never gets cleared, and will cause problems if matching XIDs
-			// were used previously. Commenting out the check for now. Need to look into whether
-			// or not we can just get rid of this logic? probably neede for retransmit cases
-			// if needed, where should it be cleared???
-			if (1) {
-//			if (it == XIDpairToConnectPending.end()) {
-				// if this is new request, put it in the queue
-
-				// Todo: 1. prepare new sock and store it
-				//	 2. send SYNACK to client
-
-				//1. Prepare new sock for this connection
-				// TODO: do we need to malloc this?
-				sock sk;
-				sk.port = -1; // just for now. This will be updated via Xaccept call
-
-				sk.sock_type = XSOCKET_STREAM; 
-
-				sk.dst_path = src_path;
-				sk.src_path = dst_path;
-				sk.isConnected = true;
-				sk.initialized = true;
-				sk.nxt = LAST_NODE_DEFAULT;
-				sk.last = LAST_NODE_DEFAULT;
-				sk.hlim = HLIM_DEFAULT;
-				sk.seq_num = 0;
-				sk.ack_num = 0;
-				memset(sk.send_buffer, 0, sk.send_buffer_size * sizeof(WritablePacket*));
-				memset(sk.recv_buffer, 0, sk.recv_buffer_size * sizeof(WritablePacket*));
-
-				pending_connection_buf.push(sk);
-
-				// Mark these src & dst XID pair
-				XIDpairToConnectPending.set(xid_pair, true);
-
-				//portToSock.set(-1, sk);	// just for now. This will be updated via Xaccept call
-
-			} else {
-				// If already in the pending queue, just send back SYNACK to the requester
-
-				// if this case is hit, we won't trigger the accept, and the connection will get be left
-				// in limbo. see above for whether or not we should even be checking.
-				// printf("%06d conn request already pending\n", _dport);
-			}
-
-
-			//2. send SYNACK to client
-			//Add XIA headers
-			XIAHeaderEncap xiah_new;
-			xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
-			xiah_new.set_last(LAST_NODE_DEFAULT);
-			xiah_new.set_hlim(HLIM_DEFAULT);
-			xiah_new.set_dst_path(src_path);
-			xiah_new.set_src_path(dst_path);
-
-			const char* dummy = "Connection_granted";
-			WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
-
-			WritablePacket *p = NULL;
-
-			xiah_new.set_plen(strlen(dummy));
-			//click_chatter("Sent packet to network");
-
-			TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader( 0, 0); // #seq, #ack
-			p = thdr_new->encap(just_payload_part);
-
-			thdr_new->update();
-			xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
-
-			p = xiah_new.encap(p, false);
-
-			delete thdr_new;
-			//XIAHeader xiah1(p);
-			//String pld((char *)xiah1.payload(), xiah1.plen());
-			//printf("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
-			output(NETWORK_PORT).push(p);
-
-
-			// 3. Notify the api of SYN reception
-			//   Done below (via port#5005)
+			
 
 		} else if (thdr.flags() == TransportHeader::SYNACK) {
 
@@ -1056,13 +1562,11 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 
 		} else if (thdr.flags() == TransportHeader::FIN) {
 			//printf("FIN received, doing nothing\n");
+		} else {
+			printf("UNKNOWN FLAGS dport = %d hdr=%d\n", _dport, thdr.flags());		
 		}
-		else {
-			printf("UNKNOWN dport = %d hdr=%d\n", _dport, thdr.flags());		
-		}
-
+*/
 	} else if (thdr.type() == TransportHeader::XSOCK_DGRAM) {
-		click_chatter("DGRAM TIME");
 		_dport = XIDtoPort.get(_destination_xid);
 		sock *sk = portToSock.get_pointer(_dport);
 
@@ -1073,7 +1577,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 		}
 
 	} else {
-		printf("UNKNOWN!!!!! dport = %d\n", _dport);
+		printf("UNKNOWN TRANSPORT PROTOCOL! dport = %d\n", _dport);
 	}
 
 
@@ -1366,9 +1870,7 @@ void XTRANSPORT::add_handlers() {
 */
 void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 
-	xia::X_Socket_Msg *x_socket_msg = xia_socket_msg->mutable_x_socket();
-	int sock_type = x_socket_msg->type();
-	
+	click_chatter("XSOCKET!!");
 	/* =========================
 	 * Initialize socket variables
 	 * ========================= */
@@ -1376,17 +1878,15 @@ void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	sock sk;
 	sk.port = _sport;
 	sk.timer_on = false;
-	sk.synack_waiting = false;
 	sk.dataack_waiting = false;
 	sk.num_retransmit_tries = 0;
 	sk.teardown_waiting = false;
-	sk.isAcceptSocket = false;
 	sk.num_connect_tries = 0; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
 	memset(sk.send_buffer, 0, sk.send_buffer_size * sizeof(WritablePacket*));
 	memset(sk.recv_buffer, 0, sk.recv_buffer_size * sizeof(WritablePacket*));
 
 	//Set the socket_type (reliable or not) in sock
-	xia::X_Socket_Msg *x_socket_msg = xia_socket_msg.mutable_x_socket();
+	xia::X_Socket_Msg *x_socket_msg = xia_socket_msg->mutable_x_socket();
 	int sock_type = x_socket_msg->type();
 	sk.sock_type = sock_type;
 
@@ -1534,27 +2034,22 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 
 	//Bind XID
 	//click_chatter("\n\nOK: SOCKET BIND !!!\\n");
-	//get source DAG from protobuf message
 
 	xia::X_Bind_Msg *x_bind_msg = xia_socket_msg->mutable_x_bind();
-
 	String sdag_string(x_bind_msg->sdag().c_str(), x_bind_msg->sdag().size());
 
-	//String sdag_string((const char*)p_in->data(),(const char*)p_in->end_data());
-//	if (DEBUG)
-//		click_chatter("\nbind requested to %s, length=%d\n", sdag_string.c_str(), (int)p_in->length());
+	//	if (DEBUG)
+	//		click_chatter("\nbind requested to %s\n", sdag_string.c_str());
 
-	//String str_local_addr=_local_addr.unparse();
-	//str_local_addr=str_local_addr+" "+xid_string;//Make source DAG _local_addr:SID
-
-	//Set the source DAG in sock
 	sock *sk = portToSock.get_pointer(_sport);
+	// TODO: check if sk==null, meaning application has not called xsocket(), return err
+	// TODO: check if sk->sk_state == TCP_CLOSE?
+
 	if (sk->src_path.parse(sdag_string)) {
+		//Set the source DAG in sock
 		sk->nxt = LAST_NODE_DEFAULT;
 		sk->last = LAST_NODE_DEFAULT;
 		sk->hlim = hlim.get(_sport);
-		sk->isConnected = false;
-		sk->initialized = true;
 		sk->sdag = sdag_string;
 
 		//Check if binding to full DAG or just to SID only
@@ -1568,18 +2063,20 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 			sk->full_src_dag = true;
 		}
 
-		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
-		//XID xid(xid_string);
-		//TODO: Add a check to see if XID is already being used
-
 		// Map the source XID to source port (for now, for either type of tranports)
+		// TODO: race condition when two threads bind to the same XID?
+		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
 		XIDtoPort.set(source_xid, _sport);
 		addRoute(source_xid);
-
 		portToSock.set(_sport, *sk);
 
-		//click_chatter("Bound");
-		//click_chatter("set %d %d",_sport, __LINE__);
+		/* ===============================================================
+	 	* tcp_listen_start()
+	 	* http://lxr.linux.no/linux-old+v2.4.20/net/ipv4/tcp.c : 526
+	 	* TCP/IP Arch. Design & Impl pg 139
+	 	* =============================================================== */
+
+		sk->sk_state = TCP_LISTEN;
 
 	} else {
 		rc = -1;
@@ -1613,7 +2110,6 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 
 void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 {
-
 	/* ===============================================================
 	 * tcp_v4_connect()
 	 * http://lxr.linux.no/linux-old+v2.4.20/net/ipv4/tcp_ipv4.c : 751
@@ -1623,14 +2119,14 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 	int tmp;
 	int err;
 
-	//click_chatter("Xconect: connecting %d\n", _sport);
+	click_chatter("Xconect: connecting %d\n", _sport);
 
 	// Obtain destination DAG from API
 	xia::X_Connect_Msg *x_connect_msg = xia_socket_msg->mutable_x_connect();
 	String dest(x_connect_msg->ddag().c_str());
 
 	//String sdag_string((const char*)p_in->data(),(const char*)p_in->end_data());
-	//click_chatter("\nconnect requested to %s, length=%d\n",dest.c_str(),(int)p_in->length());
+	click_chatter("\nconnect requested to %s",dest.c_str());
 
 	XIAPath dst_path;
 	dst_path.parse(dest);
@@ -1797,7 +2293,7 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 	//tcp_reset_xmit_timer(sk, TCP_TIME_RETRANS, tp->rto); equivalent
 	
 	sk->timer_on = true;
-	sk->synack_waiting = true;
+	//sk->synack_waiting = true;
 	sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);	// TODO: use sk->rto?
 
 	if (! _timer.scheduled() || _timer.expiry() >= sk->expiry )
@@ -1825,14 +2321,15 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 	x_connect_msg->set_status(xia::X_Connect_Msg::CONNECTING);
 	ReturnResult(_sport, xia_socket_msg, -1, EINPROGRESS);
 
-	if (err)
+	// TODO: return err to api via returnresult
+	/*if (err)
 	{
 		tcp_set_state(sk, TCP_CLOSE);
 		// TODO: reset destination in sk
 		return err;
 	}
 
-	return 0;
+	return 0;*/
 }
 
 void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)

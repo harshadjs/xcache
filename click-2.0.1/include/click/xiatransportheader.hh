@@ -31,7 +31,14 @@ class TransportHeader : public XIAGenericExtHeader { public:
     uint32_t flags() { if (!exists(FLAGS)) return 0; return *(const uint8_t*)_map[FLAGS].data();};  
     uint32_t checksum() { if (!exists(CHECKSUM)) return 0; return *(const uint16_t*)_map[CHECKSUM].data();};  
     uint32_t window() { if (!exists(RWIN)) return 0; return *(const uint32_t*)_map[RWIN].data();};  
-    uint32_t timestamp() { if (!exists(TIMESTAMP)) return 0; return *(const uint32_t*)_map[TIMESTAMP].data();};  
+    uint32_t timestamp() { if (!exists(TIMESTAMP)) return 0; return *(const uint32_t*)_map[TIMESTAMP].data();}; 
+
+    uint32_t fin() {return flags() & TH_FIN};
+    uint32_t syn() {return flags() & TH_SYN};
+    uint32_t rst() {return flags() & TH_RST};
+    uint32_t ack() {return flags() & TH_ACK};
+
+
 	// TODO: SACK
 
     //enum { TYPE, PKT_INFO, SRC_XID, DST_XID, SEQ_NUM, ACK_NUM, LENGTH}; 	// Xtransport old header fields

@@ -37,6 +37,33 @@ using namespace std;
 
 
 #define UNUSED(x) ((void)(x))
+/*
+ * min()/max() macros that also do
+ * strict type-checking.. See the
+ * "unnecessary" pointer comparison.
+ */
+#define min(x,y) ({ \
+	const typeof(x) _x = (x);	\
+	const typeof(y) _y = (y);	\
+	(void) (&_x == &_y);		\
+	_x < _y ? _x : _y; })
+
+#define max(x,y) ({ \
+	const typeof(x) _x = (x);	\
+	const typeof(y) _y = (y);	\
+	(void) (&_x == &_y);		\
+	_x > _y ? _x : _y; })
+/*
+ * ..and if you can't take the strict
+ * types, you can specify one yourself.
+ *
+ * Or not use min/max at all, of course.
+ */
+#define min_t(type,x,y) \
+	({ type __x = (x); type __y = (y); __x < __y ? __x: __y; })
+#define max_t(type,x,y) \
+	({ type __x = (x); type __y = (y); __x > __y ? __x: __y; })
+
 
 #define ACK_DELAY			300
 #define TEARDOWN_DELAY		240000
@@ -256,6 +283,29 @@ static const uint8_t	tcp_outflags[TCP_NSTATES] = {
 	};	
 
 
+/* tcp_input.c defines */
+#define FLAG_DATA		0x01 /* Incoming frame contained data.		*/
+#define FLAG_WIN_UPDATE		0x02 /* Incoming ACK was a window update.	*/
+#define FLAG_DATA_ACKED		0x04 /* This ACK acknowledged new data.		*/
+#define FLAG_RETRANS_DATA_ACKED	0x08 /* "" "" some of which was retransmitted.	*/
+#define FLAG_SYN_ACKED		0x10 /* This ACK acknowledged SYN.		*/
+#define FLAG_DATA_SACKED	0x20 /* New SACK.				*/
+#define FLAG_ECE		0x40 /* ECE in this ACK				*/
+#define FLAG_DATA_LOST		0x80 /* SACK detected data lossage.		*/
+#define FLAG_SLOWPATH		0x100 /* Do not skip RFC checks for window update.*/
+
+#define FLAG_ACKED		(FLAG_DATA_ACKED|FLAG_SYN_ACKED)
+#define FLAG_NOT_DUP		(FLAG_DATA|FLAG_WIN_UPDATE|FLAG_ACKED)
+#define FLAG_CA_ALERT		(FLAG_DATA_SACKED|FLAG_ECE)
+#define FLAG_FORWARD_PROGRESS	(FLAG_ACKED|FLAG_DATA_SACKED)
+
+#define IsReno(tp) ((tp)->sack_ok == 0)
+#define IsFack(tp) ((tp)->sack_ok & 2)
+#define IsDSack(tp) ((tp)->sack_ok & 4)
+
+#define TCP_REMNANT (TCP_FLAG_FIN|TCP_FLAG_URG|TCP_FLAG_SYN|TCP_FLAG_PSH)
+
+
 CLICK_DECLS
 
 /**
@@ -351,7 +401,7 @@ class XTRANSPORT : public Element {
 		bool isConnected;
 		bool isAcceptSocket;
 		bool initialized;
-		bool synack_waiting;
+//		bool synack_waiting;
 		bool dataack_waiting;
 		bool teardown_waiting;
 
@@ -397,6 +447,12 @@ class XTRANSPORT : public Element {
 		//uint16_t	tcp_header_len;	/* Bytes of tcp header to send		*/
 
 	/*
+	 *	Header prediction flags
+	 *	0x5?10 << 16 + snd_wnd in net byte order
+	 */
+	//	uint32_t	pred_flags;
+
+	/*
 	 *	RFC793 variables by their proper names. This means you can
 	 *	read the code and the spec side by side (and laugh ...)
 	 *	See RFC793 and RFC1122. The RFC writes these in capitals.
@@ -410,6 +466,19 @@ class XTRANSPORT : public Element {
 	 	uint32_t	snd_sml;	/* Last byte of the most recently transmitted small packet */
 		uint32_t	rcv_tstamp;	/* timestamp of last received ACK (for keepalives) */
 		uint32_t	lsndtime;	/* timestamp of last sent data packet (for restart window) */
+
+		 /* Delayed ACK control data */
+		struct {
+			uint8_t	pending;	/* ACK is pending */
+			uint8_t	quick;		/* Scheduled number of quick acks	*/
+			uint8_t	pingpong;	/* The session is interactive		*/
+			uint8_t	blocked;	/* Delayed ACK was blocked by socket lock*/
+			uint32_t	ato;		/* Predicted tick of soft clock		*/
+			unsigned long timeout;	/* Currently scheduled timeout		*/
+			uint32_t	lrcvtime;	/* timestamp of last received data packet*/
+			uint16_t	last_seg_size;	/* Size of last incoming segment	*/
+			uint16_t	rcv_mss;	/* MSS used for delayed ACK decisions	*/ 
+		} ack;
 
 		uint32_t	tsoffset;	/* timestamp offset */
 
@@ -437,18 +506,38 @@ class XTRANSPORT : public Element {
 		uint32_t	tlp_high_seq;	/* snd_nxt at the time of TLP retransmit. */
 
 	/* RTT measurement */
+		uint8_t		backoff;	/* backoff	(2.4.20)				*/
 		uint32_t	srtt;		/* smoothed round trip time << 3	*/
 		uint32_t	mdev;		/* medium deviation			*/
 		uint32_t	mdev_max;	/* maximal mdev for the last rtt period	*/
 		uint32_t	rttvar;		/* smoothed mdev_max			*/
 		uint32_t	rtt_seq;	/* sequence number to update rttvar	*/
+		uint32_t 	rto;		/* retransmit timemout 				*/
 
 		uint32_t	packets_out;	/* Packets which are "in flight"	*/
 		uint32_t	retrans_out;	/* Retransmitted packets out		*/
 
+		uint8_t retransmits; /* Number of unrecovered RTO timeouts(2.4.20)	*/
+
 		uint8_t	reordering;	/* Packet reordering metric.		*/
 
 		uint8_t	keepalive_probes; /* num of allowed keep alive probes	*/
+
+	/*	PAWS/RTTM data	*/
+		long	ts_recent_stamp;/* Time we stored ts_recent (for aging) */
+		uint32_t	ts_recent;	/* Time stamp to echo next		*/
+		uint32_t	rcv_tsval;	/* Time stamp value             	*/
+		uint32_t	rcv_tsecr;	/* Time stamp echo reply        	*/
+		uint16_t 	saw_tstamp : 1,	/* Saw TIMESTAMP on last packet		*/
+			tstamp_ok : 1,	/* TIMESTAMP seen on SYN packet		*/
+			dsack : 1,	/* D-SACK is scheduled			*/
+			wscale_ok : 1,	/* Wscale seen on SYN packet		*/
+			sack_ok : 4,	/* SACK seen on SYN packet		*/
+			snd_wscale : 4,	/* Window scaling received from sender	*/
+			rcv_wscale : 4;	/* Window scaling to send to receiver	*/
+		uint8_t	num_sacks;	/* Number of SACK blocks		*/
+		uint16_t	user_mss;	/* mss requested by user in ioctl	*/
+		uint16_t	mss_clamp;	/* Maximal mss, negotiated at connection setup */
 
 	/*
 	 *	Slow start and congestion control (see also Nagle, and Karn & Partridge)
@@ -598,7 +687,256 @@ class XTRANSPORT : public Element {
     WritablePacket* copy_cid_response_packet(Packet *, struct sock *);
 
     char *random_xid(const char *type, char *buf);
+
+    /*
+    ** TCP helper functions (tcp.h/c)
+    */
     void tcp_set_state(struct sock *sk, int state);
+    int before(uint32_t seq1, uint32_t seq2)
+	{
+        return (int32_t)(seq1-seq2) < 0;
+	}
+
+	int after(uint32_t seq1, uint32_t seq2)
+	{
+		return (int32_t)(seq2-seq1) < 0;
+	}
+
+	/* is s2<=s1<=s3 ? */
+	int between(uint32_t seq1, uint32_t seq2, uint32_t seq3)
+	{
+		return seq3 - seq2 >= seq1 - seq2;
+	}
+	/* Called to compute a smoothed rtt estimate. The data fed to this
+	 * routine either comes from timestamps, or from segments that were
+	 * known _not_ to have been retransmitted [see Karn/Partridge
+	 * Proceedings SIGCOMM 87]. The algorithm is from the SIGCOMM 88
+	 * piece by Van Jacobson.
+	 * NOTE: the next three routines used to be one big routine.
+	 * To save cycles in the RFC 1323 implementation it was better to break
+	 * it up into three procedures. -- erics
+	 */
+	void tcp_rtt_estimator(struct sock *sk, const uint32_t mrtt)
+	{
+		struct sock *tp = sk;
+		long m = mrtt; /* RTT */
+
+		/*	The following amusing code comes from Jacobson's
+		 *	article in SIGCOMM '88.  Note that rtt and mdev
+		 *	are scaled versions of rtt and mean deviation.
+		 *	This is designed to be as fast as possible
+		 *	m stands for "measurement".
+		 *
+		 *	On a 1990 paper the rto value is changed to:
+		 *	RTO = rtt + 4 * mdev
+		 *
+		 * Funny. This algorithm seems to be very broken.
+		 * These formulae increase RTO, when it should be decreased, increase
+		 * too slowly, when it should be increased quickly, decrease too quickly
+		 * etc. I guess in BSD RTO takes ONE value, so that it is absolutely
+		 * does not matter how to _calculate_ it. Seems, it was trap
+		 * that VJ failed to avoid. 8)
+		 */
+		if (m == 0)
+			m = 1;
+		if (tp->srtt != 0) {
+			m -= (tp->srtt >> 3);	/* m is now error in rtt est */
+			tp->srtt += m;		/* rtt = 7/8 rtt + 1/8 new */
+			if (m < 0) {
+				m = -m;		/* m is now abs(error) */
+				m -= (tp->mdev >> 2);   /* similar update on mdev */
+				/* This is similar to one of Eifel findings.
+				 * Eifel blocks mdev updates when rtt decreases.
+				 * This solution is a bit different: we use finer gain
+				 * for mdev in this case (alpha*beta).
+				 * Like Eifel it also prevents growth of rto,
+				 * but also it limits too fast rto decreases,
+				 * happening in pure Eifel.
+				 */
+				if (m > 0)
+					m >>= 3;
+			} else {
+				m -= (tp->mdev >> 2);   /* similar update on mdev */
+			}
+			tp->mdev += m;	    	/* mdev = 3/4 mdev + 1/4 new */
+			if (tp->mdev > tp->mdev_max) {
+				tp->mdev_max = tp->mdev;
+				if (tp->mdev_max > tp->rttvar)
+					tp->rttvar = tp->mdev_max;
+			}
+			if (after(tp->snd_una, tp->rtt_seq)) {
+				if (tp->mdev_max < tp->rttvar)
+					tp->rttvar -= (tp->rttvar - tp->mdev_max) >> 2;
+				tp->rtt_seq = tp->snd_nxt;
+				tp->mdev_max = TCP_RTO_MIN; // FIXME: is it ok to replace tcp_rto_min(sk) with TCP_RTO_MIN?
+			}
+		} else {
+			/* no previous measure. */
+			tp->srtt = m << 3;	/* take the measured time to be rtt */
+			tp->mdev = m << 1;	/* make sure rto = 3*rtt */
+			tp->mdev_max = tp->rttvar = max(tp->mdev, TCP_RTO_MIN); // FIXME: same as above
+			tp->rtt_seq = tp->snd_nxt;
+		}
+	}
+
+	/* Calculate rto without backoff.  This is the second half of Van Jacobson's
+	 * routine referred to above.
+	 */
+	void tcp_set_rto(struct sock *sk)
+	{
+		sk->rto = (sk->srtt >> 3) + sk->rttvar;
+		// Bound RTO
+		if (sk->rto > TCP_RTO_MAX)
+		    sk->rto = TCP_RTO_MAX;
+	}
+
+	/* Increase initial CWND conservatively: if estimated
+	 * RTT is low enough (<20msec) or if we have some preset ssthresh.
+	 *
+	 * Numbers are taken from RFC2414.
+	 */
+	uint32_t tcp_init_cwnd(struct sock *tp)
+	{
+		uint32_t cwnd;
+
+		if (tp->mss_cache > 1460)
+			return 2;
+
+		cwnd = (tp->mss_cache > 1095) ? 3 : 4;
+
+		if (!tp->srtt || (tp->snd_ssthresh >= 0xFFFF && tp->srtt > ((HZ/50)<<3)))
+			cwnd = 2;
+		else if (cwnd > tp->snd_ssthresh)
+			cwnd = tp->snd_ssthresh;
+
+		return min_t(uint32_t, cwnd, tp->snd_cwnd_clamp);
+	}
+
+	/* Initialize metrics on socket. */
+
+	void tcp_init_metrics(struct sock *tp)
+	{
+		/* Removed code related to dst_entry since we don't have destination cache */
+
+		/* Play conservative. If timestamps are not
+		 * supported, TCP will fail to recalculate correct
+		 * rtt, if initial rto is too small. FORGET ALL AND RESET!
+		 */
+		if (!tp->saw_tstamp && tp->srtt) {
+			tp->srtt = 0;
+			tp->mdev = tp->mdev_max = tp->rttvar = TCP_TIMEOUT_INIT;
+			tp->rto = TCP_TIMEOUT_INIT;
+		}
+	}
+
+	void tcp_initialize_rcv_mss(struct sock *tp)
+	{
+		unsigned int hint = min(tp->advmss, tp->mss_cache);
+
+		hint = min(hint, tp->rcv_wnd/2);
+		hint = min(hint, TCP_MIN_RCVMSS);
+		hint = max(hint, TCP_MIN_MSS);
+
+		tp->ack.rcv_mss = hint;
+	}
+
+	void tcp_done(struct sock *sk)
+	{
+		tcp_set_state(sk, TCP_CLOSE);
+		//tcp_clear_xmit_timers(sk); TODO:
+	}
+
+	int tcp_ack(struct sock *sk, TransportHeader *thdr, int flag)
+	{
+		struct sock *tp = sk;
+		uint32_t prior_snd_una = tp->snd_una;
+		uint32_t ack_seq = thdr->seq_num();
+		uint32_t ack = thdr->ack_num();
+		uint32_t prior_in_flight;
+		int prior_packets;
+
+		/* If the ack is newer than sent or older than previous acks
+		 * then we can probably ignore it.
+		 */
+		if (after(ack, tp->snd_nxt))
+			goto uninteresting_ack;
+
+		if (before(ack, prior_snd_una))
+			goto old_ack;
+
+		if (!(flag&FLAG_SLOWPATH) && after(ack, prior_snd_una)) {
+			/* Window is constant, pure forward advance.
+			 * No more checks are required.
+			 * Note, we use the fact that SND.UNA>=SND.WL2.
+			 */
+			tcp_update_wl(tp, ack, ack_seq);
+			tp->snd_una = ack;
+			flag |= FLAG_WIN_UPDATE;
+
+		} else {
+			if (ack_seq != TCP_SKB_CB(skb)->end_seq)
+				flag |= FLAG_DATA;
+
+			flag |= tcp_ack_update_window(sk, tp, skb, ack, ack_seq);
+
+			/*
+			if (TCP_SKB_CB(skb)->sacked)
+				flag |= tcp_sacktag_write_queue(sk, skb, prior_snd_una);
+
+			if (TCP_ECN_rcv_ecn_echo(tp, skb->h.th))
+				flag |= FLAG_ECE;
+			*/
+		}
+
+		/* We passed data and got it acked, remove any soft error
+		 * log. Something worked...
+		 */
+		sk->err_soft = 0;
+		tp->rcv_tstamp = tcp_time_stamp;
+		if ((prior_packets = tp->packets_out) == 0)
+			goto no_queue;
+
+		prior_in_flight = tcp_packets_in_flight(tp);
+
+		/* See if we can take anything off of the retransmit queue. */
+		flag |= tcp_clean_rtx_queue(sk);
+
+		if (tcp_ack_is_dubious(tp, flag)) {
+			/* Advanve CWND, if state allows this. */
+			if ((flag&FLAG_DATA_ACKED) && prior_in_flight >= tp->snd_cwnd &&
+			    tcp_may_raise_cwnd(tp, flag))
+				tcp_cong_avoid(tp);
+			tcp_fastretrans_alert(sk, prior_snd_una, prior_packets, flag);
+		} else {
+			if ((flag&FLAG_DATA_ACKED) && prior_in_flight >= tp->snd_cwnd)
+				tcp_cong_avoid(tp);
+		}
+
+		if ((flag & FLAG_FORWARD_PROGRESS) || !(flag&FLAG_NOT_DUP))
+			dst_confirm(sk->dst_cache);
+
+		return 1;
+
+	no_queue:
+		tp->probes_out = 0;
+
+		/* If this ack opens up a zero window, clear backoff.  It was
+		 * being used to time the probes, and is probably far higher than
+		 * it needs to be for normal retransmission.
+		 */
+		if (tp->send_head)
+			tcp_ack_probe(sk);
+		return 1;
+
+	old_ack:
+		if (TCP_SKB_CB(skb)->sacked)
+			tcp_sacktag_write_queue(sk, skb, prior_snd_una);
+
+	uninteresting_ack:
+		SOCK_DEBUG(sk, "Ack %u out of %u:%u\n", ack, tp->snd_una, tp->snd_nxt);
+		return 0;
+	}
+
 
 
 	bool should_buffer_received_packet(WritablePacket *p, sock *sk);
