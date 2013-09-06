@@ -177,12 +177,17 @@ XTRANSPORT::run_timer(Timer *timer)
 					sk->timer_on = false;
 					sk->synack_waiting = false;
 
-					String str = String("^Connection-failed^");
-					WritablePacket *ppp = WritablePacket::make (256, str.c_str(), str.length(), 0);
+					// Notify API that the connection failed
+					xia::XSocketMsg xsm;
+					xsm.set_type(xia::XCONNECT);
+					xsm.set_sequence(0); // TODO: what should This be?
+					xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
+					connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
+					ReturnResult(_sport, &xsm);
 
-					if (DEBUG)
-						//click_chatter("Timer: Sent packet to socket with port %d", _sport);
-                        output(API_PORT).push(UDPIPPrep(ppp, _sport));
+					if (DEBUG) {
+						click_chatter("Timer: Sent packet to socket with port %d", _sport);
+					}
 				}
 
 			} else if (sk->dataack_waiting == true && sk->expiry <= now ) {
