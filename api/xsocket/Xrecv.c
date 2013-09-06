@@ -110,7 +110,9 @@ int Xrecv(int sockfd, void *rbuf, size_t len, int flags)
 
 	xsm.Clear();
 	if ((numbytes = click_reply(sockfd, seq, &xsm)) < 0) {
-		LOGF("Error retrieving recv data from Click: %s", strerror(errno));
+		if (errno != EWOULDBLOCK && errno != EAGAIN) {
+			LOGF("Error retrieving recv data from Click: %s", strerror(errno));
+		}
 		return -1;
 	}
 

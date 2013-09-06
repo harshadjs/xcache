@@ -60,6 +60,9 @@ public:
 	void setDebug(int debug) { m_debug = debug; };
 	int getDebug() { return m_debug; };
 
+	void setRecvTimeout(struct timeval *timeout) { m_timeout.tv_sec = timeout->tv_sec; m_timeout.tv_usec = timeout->tv_usec; };
+	void getRecvTimeout(struct timeval *timeout) {timeout->tv_sec = m_timeout.tv_sec; timeout->tv_usec = m_timeout.tv_usec; };
+
 	void setError(int error) { m_error = error; };
 	int getError() { return m_error; m_error = 0; };
 
@@ -77,6 +80,7 @@ private:
 	sockaddr_x *m_peer;
 	unsigned m_bufLen;
 	unsigned m_sequence;
+	struct timeval m_timeout;
 	pthread_mutex_t m_sequence_lock;
 	map<unsigned, string> m_packets;
 
@@ -116,6 +120,8 @@ void SocketState::init()
 	m_sequence = 1;
 	m_debug = 0;
 	m_error = 0;
+	m_timeout.tv_sec = 0;
+	m_timeout.tv_usec = 0;
 	pthread_mutex_init(&m_sequence_lock, NULL);
 }
 
@@ -363,13 +369,20 @@ void setDebug(int sock, int debug)
 		sstate->setDebug(debug);
 }
 
-int getError(int sock)
+void setRecvTimeout(int sock, struct timeval *timeout)
 {
 	SocketState *sstate = SocketMap::getMap()->get(sock);
 	if (sstate)
-		return sstate->getError();
+		sstate->setRecvTimeout(timeout);
+}
+
+void getRecvTimeout(int sock, struct timeval *timeout)
+{
+	SocketState *sstate = SocketMap::getMap()->get(sock);
+	if (sstate)
+		sstate->getRecvTimeout(timeout);
 	else
-		return 0;
+		timeout->tv_sec = timeout->tv_usec = 0;
 }
 
 void setError(int sock, int error)
@@ -377,6 +390,15 @@ void setError(int sock, int error)
 	SocketState *sstate = SocketMap::getMap()->get(sock);
 	if (sstate)
 		sstate->setError(error);
+}
+
+int getError(int sock)
+{
+	SocketState *sstate = SocketMap::getMap()->get(sock);
+	if (sstate)
+		return sstate->getError();
+	else
+		return 0;
 }
 
 void setSocketType(int sock, int tt)

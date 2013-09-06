@@ -64,6 +64,8 @@ void setAsync(int sock, int async);
 int isAsync(int sock);
 void setDebug(int sock, int debug);
 int getDebug(int sock);
+void setRecvTimeout(int sock, struct timeval *timeout);
+void getRecvTimeout(int sock, struct timeval *timeout);
 void setError(int sock, int error);
 int getError(int sock);
 unsigned seqNo(int sock);

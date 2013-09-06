@@ -17,6 +17,7 @@
   @file Xutil.c
   @brief Impliments internal socket helper functions
 */
+#include <sys/time.h>
 #include "Xsocket.h"
 #include "Xinit.h"
 #include "Xutil.h"
@@ -159,12 +160,20 @@ int click_send(int sockfd, xia::XSocketMsg *xsm)
 int click_get(int sock, unsigned seq, char *buf, unsigned buflen, xia::XSocketMsg *msg)
 {
 	int rc;
+	int timed = 0;
 
-	// FIXME: if someone caches our packet as we start to do the recv, we'll block forever
-	// may need to implement select so that we re-loop frequently so we can pick up our
-	// cached packet
+	struct timeval tv, start, end;
+
+	getRecvTimeout(sock, &tv);
+
+	if (timerisset(&tv)) {
+		timed = 1;
+		gettimeofday(&start, NULL);
+		timeradd(&start, &tv, &end);
+	}
 
 	while (1) {
+
 		// see if another thread received and cached our packet
 		if ((rc = getCachedPacket(sock, seq, buf, buflen)) > 0) {
 			LOGF("Got cached response with sequence # %d\n", seq);
@@ -173,6 +182,15 @@ int click_get(int sock, unsigned seq, char *buf, unsigned buflen, xia::XSocketMs
 			break;
 
 		} else {
+
+			if (timed) {
+				gettimeofday(&tv, NULL);
+				if (timercmp(&tv, &end, >)) {
+					// we timed out
+					errno = EWOULDBLOCK;
+					return -1;
+				}
+			}
 
 			struct timeval tv;
 			fd_set fds;

@@ -169,6 +169,13 @@ int Xsetsockopt(int sockfd, int optname, const void *optval, socklen_t optlen)
 			break;
 		}
 
+		case SO_RCVTIMEO:
+			if (ssoCheckSize(&optlen, sizeof(struct timeval)) < 0)
+				rc = -1;
+			else
+				setRecvTimeout(sockfd, (struct timeval*)optval);
+			break;
+
 		case SO_DEBUG:
 			if (ssoCheckSize(&optlen, sizeof(int)) < 0)
 				rc = -1;
@@ -246,6 +253,13 @@ int Xgetsockopt(int sockfd, int optname, void *optval, socklen_t *optlen)
 				*(int *)optval = getSocketType(sockfd);
 			break;
 
+		case SO_RCVTIMEO:
+			if (ssoCheckSize(optlen, sizeof(struct timeval)) < 0)
+				rc = -1;
+			else
+				getRecvTimeout(sockfd, (struct timeval *)optval);
+			break;
+
 		case SO_DEBUG:
 			if (ssoCheckSize(optlen, sizeof(int)) < 0)
 				rc = -1;
@@ -264,7 +278,6 @@ int Xgetsockopt(int sockfd, int optname, void *optval, socklen_t *optlen)
 		case SO_SNDBUF:
 		case SO_RCVBUF:
 		case SO_SNDTIMEO:
-		case SO_RCVTIMEO:
 		case SO_LINGER:
 			rc = -1;
 			break;
