@@ -5,8 +5,13 @@ if [ "$DEBUG" != "" ] ; then
 	export CFLAGS="-Wall -Wextra -DDEBUG -ggdb"
 fi
 
+
+# ipsec is included for the SHA1 functions
+# the tcpspeaker module in in local
+
 if [ ! -f .configured ] ; then
 	echo Configuring Click.....
-	./configure --disable-linuxmodule --enable-warp9 --enable-user-multithread --enable-userlevel --enable-multithread=24  --enable-ip6 --enable-ipsec "$*"
+#	./configure --disable-linuxmodule --enable-warp9 --enable-user-multithread --enable-userlevel --enable-multithread=24  --enable-ip6 --enable-ipsec --enable-local "$*"
+	./configure --disable-linuxmodule --enable-warp9 --enable-user-multithread --enable-userlevel --enable-multithread=24  --enable-ipsec --enable-local "$*"
 	touch .configured
 fi
