@@ -25,14 +25,6 @@
 
 CLICK_DECLS
 
-GenericConnHandler::GenericConnHandler(
-        XTRANSPORT *transport_layer, 
-        const unsigned short port) : state(CREATE){
-	port = port;
-	transport_layer = transport_layer;
-
-}
-
 XTRANSPORT::XTRANSPORT()
 	: _timer(this)
 {
@@ -60,52 +52,13 @@ XTRANSPORT::configure(Vector<String> &conf, ErrorHandler *errh)
 	bool is_dual_stack_router;
 	_is_dual_stack_router = false;
 
-
-	 memset(&_tcpstat, 0, sizeof(_tcpstat)); 
-    _errh = errh; 
-
-    /* _empty_note.initialize(Notifier::EMPTY_NOTIFIER, router()); */
-    
-    _tcp_globals.tcp_keepidle 	    = 120; 
-    _tcp_globals.tcp_keepintvl 	    = 120; 
-    _tcp_globals.tcp_maxidle   	    = 120; 
-    _tcp_globals.tcp_now 		    = 0; 
-    _tcp_globals.so_recv_buffer_size = 0x10000; 
-    _tcp_globals.tcp_mssdflt	    = 1420; 
-    _tcp_globals.tcp_rttdflt	    = TCPTV_SRTTDFLT / PR_SLOWHZ;
-    _tcp_globals.so_flags	   	 	= 0; 
-    _tcp_globals.so_idletime	    = 0; 
-    _verbosity 						= VERB_ERRORS; 
-
-    bool so_flags_array[32]; 
-    bool t_flags_array[10]; 
-    memset(so_flags_array, 0, 32 * sizeof(bool)); 
-    memset(t_flags_array, 0, 10 * sizeof(bool)); 
-
 	if (cp_va_kparse(conf, this, errh,
 					 "LOCAL_ADDR", cpkP + cpkM, cpXIAPath, &local_addr,
 					 "LOCAL_4ID", cpkP + cpkM, cpXID, &local_4id,
 					 "ROUTETABLENAME", cpkP + cpkM, cpElement, &routing_table_elem,
 					 "IS_DUAL_STACK_ROUTER", 0, cpBool, &is_dual_stack_router,
-					 "IDLETIME", 0, cpUnsigned, &(_tcp_globals.so_idletime),
-					"MAXSEG", 	0, cpUnsignedShort, &(_tcp_globals.tcp_mssdflt), 
-					"RCVBUF", 	0, cpUnsigned, &(_tcp_globals.so_recv_buffer_size),
-					"WINDOW_SCALING", 0, cpUnsigned, &(_tcp_globals.window_scale),
-					"USE_TIMESTAMPS", 0, cpBool, &(_tcp_globals.use_timestamp),
-					"FIN_AFTER_TCP_FIN",  0, cpBool, &(so_flags_array[8]), 
-					"FIN_AFTER_TCP_IDLE", 0, cpBool, &(so_flags_array[9]), 
-					"FIN_AFTER_UDP_IDLE", 0, cpBool, &(so_flags_array[10]), 
-					"VERBOSITY", 0, cpUnsigned, &(_verbosity), // not sure we need this
 					 cpEnd) < 0)
 		return -1;
-
-    for (int i = 0; i < 32; i++) { 
-	if (so_flags_array[i])
-	    _tcp_globals.so_flags |= ( 1 << i ) ; 
-    }
-    _tcp_globals.so_idletime *= PR_SLOWHZ; 
-    if (_tcp_globals.window_scale > TCP_MAX_WINSHIFT) 
-		_tcp_globals.window_scale = TCP_MAX_WINSHIFT; 
 
 	_local_addr = local_addr;
 	_local_hid = local_addr.xid(local_addr.destination_node());
@@ -139,7 +92,6 @@ XTRANSPORT::configure(Vector<String> &conf, ErrorHandler *errh)
 	return 0;
 }
 
-// this will be modified later
 XTRANSPORT::~XTRANSPORT()
 {
 	//Clear all hashtable entries
@@ -161,16 +113,6 @@ int
 XTRANSPORT::initialize(ErrorHandler *)
 {
 	_timer.initialize(this);
-	_fast_ticks = new Timer(this);
-	_fast_ticks->initialize(this);
-	_fast_ticks->schedule_after_msec(TCP_FAST_TICK_MS); 
-	
-	_slow_ticks = new Timer(this);
-	_slow_ticks->initialize(this);
-	_slow_ticks->schedule_after_msec(TCP_SLOW_TICK_MS); 
-
-	_errh = errh; 
-
 	//_timer.schedule_after_msec(1000);
 	//_timer.unschedule();
 	return 0;
@@ -188,35 +130,7 @@ char *XTRANSPORT::random_xid(const char *type, char *buf)
 }
 
 void
-XTRANSPORT::run_timer(Timer *t) 
-{ 
-    MFHIterator i = all_handlers_iterator(); 
-    TCPConnection *con; 
-
-    if (t == _fast_ticks) {
-		for (; i; i++) {
-			con = dynamic_cast<TCPConnection *>(i->second);
-			con->fasttimo(); 
-		}
-		_fast_ticks->reschedule_after_msec(TCP_FAST_TICK_MS);
-    } else if (t == _slow_ticks) {
-		for (; i; i++) {
-			con = dynamic_cast<TCPConnection *>(i->second);
-			con->slowtimo(); 
-			if (con->state() == TCPS_CLOSED) {
-				delete con;
-				break;
-			}
-		}
-		_slow_ticks->reschedule_after_msec(TCP_SLOW_TICK_MS);
-		(globals()->tcp_now)++; 
-    } else {
-		debug_output(VERB_TIMERS, "%u: XTRANSPORT::run_timer: unknown timer", tcp_now()); 
-	}
-}
-
-void
-XTRANSPORT::run_timer_fake(Timer *timer)
+XTRANSPORT::run_timer(Timer *timer)
 {
 //	pthread_mutex_lock(&_lock);
 
@@ -1284,314 +1198,42 @@ void XTRANSPORT::ProcessXhcpPacket(WritablePacket *p_in)
 void XTRANSPORT::push(int port, Packet *p_input)
 {
 //	pthread_mutex_lock(&_lock);
+
 	WritablePacket *p_in = p_input->uniqueify();
-	unsigned short _dport = 0;
-	if (port == API_PORT)
-	{
-		_dport = SRC_PORT_ANNO(p_in);
-	} else {
-			//Extract the SID/CID
-	XIAHeader xiah(p_in->xia_header());
-	XIAPath dst_path = xiah.dst_path();
-	XIAPath src_path = xiah.src_path();
-	XID	destination_sid = dst_path.xid(dst_path.destination_node());
-	XID	source_cid = src_path.xid(src_path.destination_node());
+	//Depending on which CLICK-module-port it arrives at it could be control/API traffic/Data traffic
 
-	XIDpair xid_pair;
-	xid_pair.set_src(destination_sid);
-	xid_pair.set_dst(source_cid);
+	switch(port) { // This is a "CLICK" port of UDP module.
+	case API_PORT:	// control packet from socket API
+		ProcessAPIPacket(p_in);
+		break;
 
-	unsigned short _dport = XIDpairToPort.get(xid_pair);
+	case BAD_PORT: //packet from ???
+        if (DEBUG)
+            click_chatter("\n\nERROR: BAD INPUT PORT TO XTRANSPORT!!!\n\n");
+		break;
+
+	case NETWORK_PORT: //Packet from network layer
+		ProcessNetworkPacket(p_in);
+		p_in->kill();
+		break;
+
+	case CACHE_PORT:	//Packet from cache
+		ProcessCachePacket(p_in);
+		p_in->kill();
+		break;
+
+	case XHCP_PORT:		//Packet with DHCP information
+		ProcessXhcpPacket(p_in);
+		p_in->kill();
+		break;
+
+	default:
+		click_chatter("packet from unknown port: %d\n", port);
+		break;
 	}
-	/* ............... assume we some how get a handler */
- 	GenericConnHandler *handler = get_mfh(_dport, p); 
-   
-    if (!handler) { 
-		p_input->kill(); 
-		p_in->kill():
-		return; 
-    }
-    handler->push(port, p); 
 
 //	pthread_mutex_unlock(&_lock);
 }
-
-
-
-//Return the number of TCPConnections in the HandlerQueue of this TCPSpeaker
-String
-TCPSpeaker::read_num_connections(Element *e, void *)
-{
-  	TCPSpeaker *tcps = (TCPSpeaker *)e;
-	int buckets = tcps->num_connections();
-	return String(buckets);
-}
-
-
-// Iterate over all TCPConnections and pass the packet pointer to each
-// connection, have that connection write its _q_recv value at that address, and
-// then return how many bytes it wrote or -1 if unable to write anymore.
-// Return the number of bytes written or -1 if one of the connections returned
-// -1
-int
-TCPSpeaker::iter_connections(void *address, int remainingbytes)
-{
-	int result = 0;
-	for (MFHIterator mfhs = all_handlers_iterator(); mfhs; ++mfhs) {
-		const char *key = mfhs.key().unparse().c_str();
-		const int val = dynamic_cast<TCPConnection *>(mfhs.value())->so_recv_buffer_space();
-		click_chatter("[%s] -> [%d]", key, val);
-	}
-
-	if (address || remainingbytes) {};
-
-	// Iterate over mfd_hash and obtain the following for each TCPConnection
-	// write the following into the string:
-	// 32bits srcaddr
-	// 32bits dstaddr
-	// 16bits srcport
-	// 16bits dstport 
-	// 32bits TCPConnection::so_recv_buffer_space()
-//	result.append("ffffffff", 8);
-//	click_chatter("printing [%s]", result.c_str());
-	return result;
-}
-
-
-bool
-TCPSpeaker::is_syn(const Packet * p) { 
-
-    const click_tcp *tcph= p->tcp_header();
-
-    if (tcph->th_flags == TH_SYN) {  
-		debug_output(VERB_PACKETS, "[%s] received a syn packet\n", name().c_str()); 
-		return true; 
-    } 
-	
-    debug_output(VERB_PACKETS, "[%s] received a non-syn packet, sending reset\n", name().c_str()); 
-
-    const click_ip  *iph = p->ip_header();
-
-    WritablePacket * wp = Packet::make(sizeof(click_ip) + sizeof(click_tcp)); 
-
-    wp->set_network_header(wp->data(), sizeof(click_ip)); 
-
-    
-    click_ip * rst_iph = wp->ip_header(); 
-    click_tcp *rst_tcph = wp->tcp_header(); 
-    memcpy(rst_iph, iph, sizeof(click_ip)); 
-
-    rst_iph->ip_len = htons(wp->length());
-    rst_iph->ip_src = iph->ip_dst; 
-    rst_iph->ip_dst = iph->ip_src;  
-    
-    rst_tcph->th_sport = tcph->th_dport;
-    rst_tcph->th_dport = tcph->th_sport; 
-    rst_tcph->th_off = (sizeof(click_tcp)) >> 2;
-    rst_tcph->th_ack = tcph->th_seq; 
-    rst_tcph->th_seq = tcph->th_ack; 
-
-    rst_tcph->th_flags = TH_RST; 
-
-    output(TCPS_STATEFULL_OUTPUT).push(wp); 
-
-    return false; 
-} 
-
-
-//Return the verbosity bitmask of TCPConnections in the HandlerQueue of this TCPSpeaker
-String
-TCPSpeaker::read_verb(Element *e, void *)
-{
-  	TCPSpeaker *tcps = (TCPSpeaker *)e;
-	return String(tcps->_verbosity);
-}
-
-
-int
-TCPSpeaker::write_verb(const String &s, Element *e, void *, ErrorHandler *errh)
-{
-    TCPSpeaker *tcps = (TCPSpeaker *)e;
-    int verbosity;
-    if (!cp_integer(s, &verbosity))
-		return errh->error("Verbosity bitmask must be integer");
-    tcps->_verbosity = verbosity;
-    return 0;
-}
-
-
-void
-TCPSpeaker::add_handlers()
-{
-    add_read_handler("num_connections", read_num_connections, (void *)0);
-    add_read_handler("verb", read_verb, (void *)0);
-    add_write_handler("verb", write_verb, (void *)0, Handler::NONEXCLUSIVE);
-}
-
-
-int
-TCPSpeaker::llrpc(unsigned command, void *data)
-{
-  if (command == 0) {
-    int32_t *val = reinterpret_cast<int32_t *>(data);
-    *val = 200;
-    return 0;
-
-  } else if (command == 1) {
-    int32_t *val = reinterpret_cast<int32_t *>(data);
-	*val = this->num_connections();
-    return 0;
-
-  } else if (command == 2) {
-	// RETURN the _q_recv size for each TCPConnection
-	int byteswritten = this->iter_connections(data, 0);
-    return byteswritten;
-
-  } else
-    return Element::llrpc(command, data);
-}
-
-
-
-/*
-void *
-TCPSpeaker::cast(const char *n) 
-{
-    if (strcmp(n, "TCPSpeaker") == 0 )
-		return (TCPSpeaker *)this; 
-    else if (strcmp(n, Notifier::EMPTY_NOTIFIER) == 0)
-		return static_cast<Notifier *>(empty_note()); 
-    else { 
-		_errh->error("Invalid cast of TCPSpeaker to %s \n", n); 
-		return NULL; 
-    }
-
-}
-*/
-void *TCPSpeaker::cast(const char *name) {
-    if (strcmp(name, "TCPSpeaker") == 0)
-	return (TCPSpeaker *) this;
-    else if (strcmp(name, "MultiFlowDispatcher") == 0)
-	return (MultiFlowDispatcher *) this;
-    else if (strcmp(name, Notifier::EMPTY_NOTIFIER) == 0)
-		return static_cast<Notifier *>(empty_note()); 
-    else
-	return
-	    MultiFlowDispatcher::cast(name);
-}
-
-
-
-int 
-TCPSpeaker::configure(Vector<String> &conf, ErrorHandler * errh)
-{
-
-    MultiFlowDispatcher::configure(conf,errh); 
-/*    if (0 == _tp ) {
-	_tp = new tcpcb();
-	_tp->so_flags 	= SO_PLAIN_UDP; 
-	_tp->t_maxseg  	= 1460;
-	_tp->rcv_wnd 	= 4096;
-	_tp->idle_wait_ms = 5000;
-	_tp->snd_ssthresh = 0xffff;
-	_tp->tcp_out_hdr_len = sizeof(click_tcp); 
-	_tp->ip_out_hdr_len = sizeof(click_ip);
-	_tp->snd_cwnd 	= 4 * _tp->t_maxseg; 
-    } */
-
-    memset(&_tcpstat, 0, sizeof(_tcpstat)); 
-    _errh = errh; 
-
-    /* _empty_note.initialize(Notifier::EMPTY_NOTIFIER, router()); */
-    
-    _tcp_globals.tcp_keepidle 	    = 120; 
-    _tcp_globals.tcp_keepintvl 	    = 120; 
-    _tcp_globals.tcp_maxidle   	    = 120; 
-    _tcp_globals.tcp_now 		    = 0; 
-    _tcp_globals.so_recv_buffer_size = 0x10000; 
-    _tcp_globals.tcp_mssdflt	    = 1420; 
-    _tcp_globals.tcp_rttdflt	    = TCPTV_SRTTDFLT / PR_SLOWHZ;
-    _tcp_globals.so_flags	   	 	= 0; 
-    _tcp_globals.so_idletime	    = 0; 
-    _verbosity 						= VERB_ERRORS; 
-
-    bool so_flags_array[32]; 
-    bool t_flags_array[10]; 
-    memset(so_flags_array, 0, 32 * sizeof(bool)); 
-    memset(t_flags_array, 0, 10 * sizeof(bool)); 
-
-    if (cp_va_kparse(conf, this, errh, 
-		//"FLAGS", 	0, cpUnsigned, &(_tcp_globals.so_flags),
-		"IDLETIME", 0, cpUnsigned, &(_tcp_globals.so_idletime),
-		"MAXSEG", 	0, cpUnsignedShort, &(_tcp_globals.tcp_mssdflt), 
-		"RCVBUF", 	0, cpUnsigned, &(_tcp_globals.so_recv_buffer_size),
-		"WINDOW_SCALING", 0, cpUnsigned, &(_tcp_globals.window_scale),
-		"USE_TIMESTAMPS", 0, cpBool, &(_tcp_globals.use_timestamp),
-		"FIN_AFTER_TCP_FIN",  0, cpBool, &(so_flags_array[8]), 
-		"FIN_AFTER_TCP_IDLE", 0, cpBool, &(so_flags_array[9]), 
-		"FIN_AFTER_UDP_IDLE", 0, cpBool, &(so_flags_array[10]), 
-		"VERBOSITY", 0, cpUnsigned, &(_verbosity), 
-		cpIgnoreRest,		
-		cpEnd) < 0) 
-	return -1;
-    
-    for (int i = 0; i < 32; i++) { 
-	if (so_flags_array[i])
-	    _tcp_globals.so_flags |= ( 1 << i ) ; 
-    }
-    _tcp_globals.so_idletime *= PR_SLOWHZ; 
-    if (_tcp_globals.window_scale > TCP_MAX_WINSHIFT) 
-		_tcp_globals.window_scale = TCP_MAX_WINSHIFT; 
-
-    return 0 ;
-}
-
-
-int
-TCPSpeaker::initialize(ErrorHandler *errh)
-{ 
-	MultiFlowDispatcher::initialize(errh); 
-	_fast_ticks = new Timer(this);
-	_fast_ticks->initialize(this);
-	_fast_ticks->schedule_after_msec(TCP_FAST_TICK_MS); 
-	
-	_slow_ticks = new Timer(this);
-	_slow_ticks->initialize(this);
-	_slow_ticks->schedule_after_msec(TCP_SLOW_TICK_MS); 
-
-	_errh = errh; 
-	return 0; 
-}
-
-
-void
-TCPSpeaker::run_timer(Timer *t) 
-{ 
-    MFHIterator i = all_handlers_iterator(); 
-    TCPConnection *con; 
-
-    if (t == _fast_ticks) {
-		for (; i; i++) {
-			con = dynamic_cast<TCPConnection *>(i->second);
-			con->fasttimo(); 
-		}
-		_fast_ticks->reschedule_after_msec(TCP_FAST_TICK_MS);
-    } else if (t == _slow_ticks) {
-		for (; i; i++) {
-			con = dynamic_cast<TCPConnection *>(i->second);
-			con->slowtimo(); 
-			if (con->state() == TCPS_CLOSED) {
-				delete con;
-				break;
-			}
-		}
-		_slow_ticks->reschedule_after_msec(TCP_SLOW_TICK_MS);
-		(globals()->tcp_now)++; 
-    } else {
-		debug_output(VERB_TIMERS, "%u: TCPSpeaker::run_timer: unknown timer", tcp_now()); 
-	}
-}
-
 
 void XTRANSPORT::ReturnResult(int sport, xia::XSocketMsg *xia_socket_msg, int rc, int err)
 {
