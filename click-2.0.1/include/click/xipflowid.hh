@@ -97,6 +97,7 @@ class XIPFlowID { public:
 	_dport = p;
     }
 
+
     /** @brief Set this flow to the given value.
      * @param saddr source address
      * @param sport source port, in network order
@@ -109,7 +110,9 @@ class XIPFlowID { public:
 	_dport = dport;
     }
 
-
+    XIPFlowID reverse() const {
+        return XIPFlowID(_daddr, _dport, _saddr, _sport);
+    }
     /** @brief Return this flow's reverse, which swaps sources and destinations.
      * @return XIPFlowID(daddr(), dport(), saddr(), sport()) */
  //    XIPFlowID reverse() const {
