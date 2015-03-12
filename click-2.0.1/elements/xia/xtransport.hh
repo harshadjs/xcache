@@ -16,7 +16,7 @@
 #include <click/string.hh>
 #include <elements/ipsec/sha1_impl.hh>
 #include <click/xiatransportheader.hh>
-
+#include <click/xipflowid.h>
 
 #if CLICK_USERLEVEL
 #include <list>
@@ -101,6 +101,17 @@ typedef struct {
 	HashTable<unsigned short, unsigned int> events;
 } PollEvent;
 
+struct mini_tcpip
+{
+    uint16_t ti_len;
+    uint16_t ti_seq;
+    uint16_t ti_ack;
+    uint16_t ti_off;
+    uint16_t ti_flags;
+    uint16_t ti_win;
+    uint16_t ti_urp;
+};
+
 struct tcp_globals 
 { 
         int     tcp_keepidle; 
@@ -127,46 +138,26 @@ class GenericConnHandler {
     * Creates a transport connection handler. This constructor should always be called
     * even if it is overwirtten */
     GenericConnHandler (
-        XTRANSPORT *transport_layer, 
-        const unsigned short port);  
+        XTRANSPORT *transport, 
+        const XIPFlowID &flowid,
+        int type);  
 
-
-    /** @brief analog to Element::push
-    * @param port port from which the packet comes
-    * @param p the packet
-    * 
-    * The default push kills all packets, this function should 
-    * be overwritten if the Dispatcher has at least one push port
-    *
-    * @sa Element::push */
     virtual void push(const int port, Packet *p) = 0 ;
-
-    // * @brief analog to Element::pull
-    // * @param port The port that is pulled
-    // * @return The packet
-    // * 
-    // * The default return always NULL. 
-    // * Note: There is no empty notifier. Use set_pullable instead.
-    // *
-    // * @sa Element::push set_pullable 
     virtual Packet *pull(const int port) = 0;
-
     virtual ~GenericConnHandler(); 
+    
+    int get_type() { return type; }
+    // virtual HandlerState set_state(const HandlerState new_state, const int input_port = -1); 
+    HandlerState set_state(const HandlerState s) {state = s;}
+    HandlerState get_state(){ return state; } 
 
 protected:
 
     /** @brief returns the Dispatcher that the Handler is associated with
     * 
     * @return The MultiFlowDispatcher */
-    // following method was declared const, but g++ ignores this
-    XTRANSPORT *get_transport_layer() const { return transport_layer; }
- 
-    int verbosity () const;
-    // virtual HandlerState set_state(const HandlerState new_state, const int input_port = -1); 
-    HandlerState set_state(const HandlerState s) {state = s;}
-    HandlerState get_state(){ return state; } 
-
-    unsigned int get_port() {return port;}
+    XTRANSPORT *get_transport() const { return transport; }
+    XIPFlowID* flowid() {return flowid;}
 //     // Next 3 lines formerly declared protected
 //     void set_q_membership(int qid)  { /* click_chatter("q_mem %d", q_membership); */ q_membership |= (1 << qid); } 
 //     void del_q_membership(int qid)  { q_membership &= ~(1 <<qid); }
@@ -179,20 +170,19 @@ protected:
     private: 
 
     GenericConnHandler() { };
-    unsigned int port;
-    XTRANSPORT *transport_layer;
-    
+    XIPFlowID flowid;
+    XTRANSPORT *transport;
+    int type;   // 0: Reliable transport (SID), 1: Unreliable transport (SID), 2: Content Chunk transport (CID)
     HandlerState state;
-    friend class XTRANSPORT; 
+    friend class XTRANSPORT;
 };
 
-typedef HashTable<unsigned short, GenericConnHandler*>::iterator ConnIterator; 
+typedef HashTable<XIPFlowID, GenericConnHandler*>::iterator ConnIterator; 
 
 class XTRANSPORT : public Element { 
 
     friend class GenericConnHandler;
-
-
+    
   public:
     XTRANSPORT();
     ~XTRANSPORT();
@@ -213,11 +203,6 @@ class XTRANSPORT : public Element {
     
   private:
 
-    /* Core data structure */
-    HashTable<unsigned short, GenericConnHandler*> conn_handlers;
-    ConnIterator conn_iterator;
-    int num_connections;
-
     uint32_t _cid_type, _sid_type;
     XID _local_hid;
     XIAPath _local_addr;
@@ -229,27 +214,19 @@ class XTRANSPORT : public Element {
 
     Packet* UDPIPPrep(Packet *, int);
 
-
-
     /* Legacy fields, to be modified later */
     list<int> xcmp_listeners;   // list of ports wanting xcmp notifications
 
-    HashTable<XID, unsigned short> XIDtoPort;
-    HashTable<XIDpair , unsigned short> XIDpairToPort;
-    
-
-    HashTable<unsigned short, bool> portToActive;
-    HashTable<XIDpair , bool> XIDpairToConnectPending;
-
+    /* Core data structures */
+    HashTable<XIPFlowID, GenericConnHandler*> conn_handlers;
+    ConnIterator conn_iterator;
+    int num_connections;
     // FIXME: can these be rolled into the sock structure?
 	HashTable<unsigned short, int> nxt_xport;
     HashTable<unsigned short, int> hlim;
 
     HashTable<unsigned short, PollEvent> poll_events;
 
-    
-    atomic_uint32_t _id;
-    bool _cksum;
     XIAXIDRouteTable *_routeTable;
     
     //modify routing table
@@ -265,7 +242,9 @@ class XTRANSPORT : public Element {
  
 
  
-  protected:    
+  protected:
+    GenericConnHandler* Get_handler_by_src_port(const unsigned int port);
+
     void copy_common(struct sock *sk, XIAHeader &xiahdr, XIAHeaderEncap &xiah);
     WritablePacket* copy_packet(Packet *, struct sock *);
     WritablePacket* copy_cid_req_packet(Packet *, struct sock *);
@@ -328,7 +307,11 @@ public:
     ConnIterator Get_conn_iterator() { return conn_iterator; }
     int Get_num_connections() { return num_connections; }
 
+
 private:
+    TCPConnection * new_handler(const unsigned int port) { 
+        return new TCPConnection(this, port);
+    }
 
     virtual GenericConnHandler *new_handler(const unsigned short port) = 0;
     void add_handler(GenericConnHandler *handler); // or this one?
@@ -371,6 +354,14 @@ private:
 
 };
 
+GenericConnHandler::GenericConnHandler(
+        XTRANSPORT *transport, 
+        const XIPFlowID &flowid,
+        int type) : state(CREATE){
+    flowid = flowid;
+    transport = transport;
+    type = type;
+}
 
 
 CLICK_ENDDECLS

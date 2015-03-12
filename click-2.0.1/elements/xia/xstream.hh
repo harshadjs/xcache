@@ -419,6 +419,7 @@ private:
 
 	XIAPath src_path() { return src_path; }
 	XIAPath dst_path() { return dst_path; }
+	unsigned is_polling() { return polling; }
 	inline void tcp_set_state(short);
 	inline void print_tcpstats(WritablePacket *p, char *label);
 	short tcp_state() const { return tp->t_state; } 

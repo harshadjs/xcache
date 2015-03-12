@@ -242,9 +242,6 @@ TCPConnection::tcp_input(WritablePacket *p)
 					debug_output(VERB_TCPSTATS, "input (fp) updating rcv_nxt to [%u]", tp->rcv_nxt);
 				}
 
-				if (has_pullable_data()) { 
-						set_pullable(TCPS_STATELESS_OUTPUT,true); 
-				}
 				tp->t_flags |= TF_DELACK;
 				tcp_output();
 				return;
@@ -294,7 +291,23 @@ TCPConnection::tcp_input(WritablePacket *p)
 			tp->t_flags |= TF_ACKNOW;
 			tcp_set_state(TCPS_SYN_RECEIVED); 
 			tp->t_timer[TCPT_KEEP] = TCPTV_KEEP_INIT; 
-			get_transport()->_tcpstat.tcps_accepts++; 
+			get_transport()->_tcpstat.tcps_accepts++;
+
+
+			if (is_polling()) {
+				// tell API we are writble now
+				ProcessPollEvent(tcph -> th_dport, POLLOUT);
+			}
+
+			// Notify API that the connection is established
+			xia::XSocketMsg xsm;
+			xsm.set_type(xia::XCONNECT);
+			xsm.set_sequence(0); // TODO: what should this be?
+			xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
+			XIAPath src_path = xiah.src_path();
+			connect_msg->set_ddag(src_path.unparse().c_str());
+			connect_msg->set_status(xia::X_Connect_Msg::XCONNECTED);
+			ReturnResult(tcph -> th_dport, &xsm);
 			goto trimthenstep6;
 
 			/* 530 */
@@ -713,8 +726,6 @@ TCPConnection::tcp_input(WritablePacket *p)
 					debug_output(VERB_TCPSTATS, "input (closing) updating rcv_nxt to [%u]", tp->rcv_nxt);
 				}
 				
-				if (has_pullable_data())
-					set_pullable(TCPS_STATELESS_OUTPUT, true);
 			}
 		    break;
 		    /* 993 */
@@ -799,9 +810,6 @@ dodata:
 			debug_output(VERB_TCPSTATS, "input (sp) updating rcv_nxt to [%u]", tp->rcv_nxt);
 		}
 
-		if (has_pullable_data()) {
-			set_pullable(TCPS_STATELESS_OUTPUT,true); 
-		}
 		/* end TCP_REASS */ 
 
 
