@@ -8,8 +8,7 @@
 #include <click/vector.hh>
 
 #include <click/xiacontentheader.hh>
-#include "xiatransport.hh"
-#include "xtransport.hh"
+#include "xstream.h"
 #include <click/xiatransportheader.hh>
 
 /*
@@ -51,44 +50,10 @@ CLICK_DECLS
 
 
 void
-TCPConnection::push(int port, Packet *p) {
+TCPConnection::push(Packet *_p) {
 
-		//Depending on which CLICK-module-port it arrives at it could be control/API traffic/Data traffic
-WritablePacket *p = _p->uniqueify(); 
-
-	switch(port) { // This is a "CLICK" port of UDP module.
-	case API_PORT:	// control packet from socket API
-		int retval = usrsend(p);
-		if (retval < 0) { 
-			debug_output(VERB_ERRORS, "TCPConnection::usrsend returned an error: [%d]", retval);
-		}
-		break;
-
-	case BAD_PORT: //packet from ???
-        if (DEBUG)
-            click_chatter("\n\nERROR: BAD INPUT PORT TO XTRANSPORT!!!\n\n");
-		break;
-
-	case NETWORK_PORT: //Packet from network layer
-		tcp_input(p_in);
-		p_in->kill();
-		break;
-
-	case CACHE_PORT:	//Packet from cache
-		ProcessCachePacket(p_in);
-		p_in->kill();
-		break;
-
-	case XHCP_PORT:		//Packet with DHCP information
-		ProcessXhcpPacket(p_in);
-		p_in->kill();
-		break;
-
-	default:
-		click_chatter("packet from unknown port: %d\n", port);
-		break;
-	}
-
+	WritablePacket *p = _p->uniqueify(); 
+	tcp_input(p);
 }
 
 
@@ -104,6 +69,7 @@ TCPConnection::print_tcpstats(WritablePacket *p, char* label)
 
 }
 
+
 // Stateful TCP segment input (recvd packet) handling
 void 
 TCPConnection::tcp_input(WritablePacket *p)
@@ -112,20 +78,21 @@ TCPConnection::tcp_input(WritablePacket *p)
     u_long		ts_val, ts_ecr;
     int			len; //,tlen; /* seems to be unused */
     unsigned	off, optlen;
-    u_char		*optp;
+    // u_char		*optp;
     int		ts_present = 0;
     int 	iss = 0; 
     int 	todrop, acked, ourfinisacked, needoutput = 0;
     struct 	mini_tcpip  ti; 
 //  tcp_seq_t	tseq; 
+    XIAHeader xiah(p->xia_header());
+    TransportHeader thdr(p);
 
-    const click_ip 	*iph = p->ip_header();
     const click_tcp *tcph= p->tcp_header();
 
-    speaker()->_tcpstat.tcps_rcvtotal++; 
+    get_transport()->_tcpstat.tcps_rcvtotal++; 
 
     /* we need to copy ti, since we need it later */
-    ti.ti_len = ntohs(iph->ip_len); 
+    ti.ti_len = (uint16_t)(xiah.plen() - thdr.hlen());
     ti.ti_seq = ntohl(tcph->th_seq);
     ti.ti_ack = ntohl(tcph->th_ack);
     ti.ti_off = tcph->th_off;
@@ -137,17 +104,17 @@ TCPConnection::tcp_input(WritablePacket *p)
     off = ti.ti_off << 2; 
 
     if (off < sizeof(click_tcp)) {
-		speaker()->_tcpstat.tcps_rcvbadoff++; 
+		get_transport()->_tcpstat.tcps_rcvbadoff++; 
 		goto drop;
     }
-    ti.ti_len -= sizeof(click_tcp) + off; 
+    // ti.ti_len -= sizeof(click_tcp) + off; 
 
     if (tp->so_flags & SO_FIN_AFTER_TCP_IDLE)
-		tp->t_timer[TCPT_IDLE] = speaker()->globals()->so_idletime; 
+		tp->t_timer[TCPT_IDLE] = get_transport()->globals()->so_idletime; 
 
     /*237*/
-    optlen = off - sizeof(click_tcp);
-    optp   = (u_char *)iph + 40;
+    // optlen = off - sizeof(click_tcp);
+    // optp   = (u_char *)iph + 40;
 
 	/* TODO Timestamp prediction */
 
@@ -162,10 +129,10 @@ TCPConnection::tcp_input(WritablePacket *p)
 
     /*334*/
     tp->t_idle = 0; 
-    tp->t_timer[TCPT_KEEP] = speaker()->globals()->tcp_keepidle; 
+    tp->t_timer[TCPT_KEEP] = get_transport()->globals()->tcp_keepidle; 
 
     /*344*/
-	_tcp_dooptions(optp, optlen, tcph, &ts_present, &ts_val, &ts_ecr);
+	// _tcp_dooptions(optp, optlen, tcph, &ts_present, &ts_val, &ts_ecr);
 
     /*347 TCP "Fast Path" packet processing */ 
 
@@ -195,7 +162,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 			 *  record the timestamp. */
 			if (ts_present && SEQ_LEQ(ti.ti_seq, tp->last_ack_sent) &&
 				SEQ_LT(tp->last_ack_sent, ti.ti_seq + ti.ti_len)) {
-				tp->ts_recent_age = speaker()->tcp_now();
+				tp->ts_recent_age = get_transport()->tcp_now();
 				tp->ts_recent = ts_val;
 			}
 
@@ -206,15 +173,15 @@ TCPConnection::tcp_input(WritablePacket *p)
 
 					/* this is a pure ack for outstanding data. */
 					debug_output(VERB_TCP, "[%s] got pure ack: [%u]", SPKRNAME, ti.ti_ack);
-					++(speaker()->_tcpstat.tcps_predack);
+					++(get_transport()->_tcpstat.tcps_predack);
 					if (ts_present)
-						tcp_xmit_timer((speaker()->tcp_now()) - ts_ecr+1);
+						tcp_xmit_timer((get_transport()->tcp_now()) - ts_ecr+1);
 					else if (tp->t_rtt && SEQ_GT(ti.ti_ack, tp->t_rtseq))
 						tcp_xmit_timer(tp->t_rtt);
 
 					acked = ti.ti_ack - tp->snd_una;
-					(speaker()->_tcpstat.tcps_rcvackpack)++;
-					speaker()->_tcpstat.tcps_rcvackbyte += acked;
+					(get_transport()->_tcpstat.tcps_rcvackpack)++;
+					get_transport()->_tcpstat.tcps_rcvackbyte += acked;
 					
 					// We can now drop data we know was recieved by the other side
 					_q_usr_input.drop_until(acked); 
@@ -251,18 +218,19 @@ TCPConnection::tcp_input(WritablePacket *p)
 				tp->rcv_nxt += ti.ti_len;
 
 				// Update some TCP Stats
-				++(speaker()->_tcpstat.tcps_preddat);
-				(speaker()->_tcpstat.tcps_rcvpack)++;
-				speaker()->_tcpstat.tcps_rcvbyte += ti.ti_len;
+				++(get_transport()->_tcpstat.tcps_preddat);
+				(get_transport()->_tcpstat.tcps_rcvpack)++;
+				get_transport()->_tcpstat.tcps_rcvbyte += ti.ti_len;
 				
 				/* Drop TCP/IP hdrs and TCP opts, add data to recv queue. */
-				p->pull(sizeof(click_ip) + off); 
+				WritablePacket *copy = WritablePacket::make(0, (const void*)thdr.payload(), (uint32_t)ti.ti_len, 0);
+				delete p;
 
 				/* _q_recv.push() corresponds to the tcp_reass function whose purpose is
 				 * to put all data into the TCPQueue for both possible reassembly and
 				 * in-order presentation to the "application socket" which in the
-				 * TCPSpeaker is the stateless pull port. */
-				if (_q_recv.push(p, ti.ti_seq, ti.ti_seq + ti.ti_len) < 0) {
+				 * TCPget_transport is the stateless pull port. */
+				if (_q_recv.push(copy, ti.ti_seq, ti.ti_seq + ti.ti_len) < 0) {
 					debug_output(VERB_ERRORS, "Fast Path segment push into q_recv FAILED");
 				}
 
@@ -286,7 +254,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 	print_tcpstats(p, "tcp_input (sp)");
 	
     /* 438 TCP "Slow Path" processing begins here */
-    p->pull(sizeof(click_ip) + off); 
+	WritablePacket *copy = WritablePacket::make(0, (const void*)thdr.payload(), (uint32_t)ti.ti_len, 0);
 
     int win; 
 	win = so_recv_buffer_space();
@@ -326,7 +294,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 			tp->t_flags |= TF_ACKNOW;
 			tcp_set_state(TCPS_SYN_RECEIVED); 
 			tp->t_timer[TCPT_KEEP] = TCPTV_KEEP_INIT; 
-			speaker()->_tcpstat.tcps_accepts++; 
+			get_transport()->_tcpstat.tcps_accepts++; 
 			goto trimthenstep6;
 
 			/* 530 */
@@ -399,9 +367,9 @@ TCPConnection::tcp_input(WritablePacket *p)
     if (ts_present && (tiflags & TH_RST) == 0 && tp->ts_recent &&
 	    TSTMP_LT(ts_val, tp->ts_recent)) {
 
-		print_tcpstats(p, "tcp_input:ts - dan doesn't expect code execution to reach here unless connection is VERY old");
+		// print_tcpstats(p, "tcp_input:ts - dan doesn't expect code execution to reach here unless connection is VERY old");
 		/* Check to see if ts_recent is over 24 days old.  */
-		if ((int)(speaker()->tcp_now() - tp->ts_recent_age) > TCP_PAWS_IDLE) {
+		if ((int)(get_transport()->tcp_now() - tp->ts_recent_age) > TCP_PAWS_IDLE) {
 			/*
 			 * Invalidate ts_recent.  If this segment updates ts_recent, the age
 			 * will be reset later and ts_recent will get a valid value.  If it
@@ -413,9 +381,9 @@ TCPConnection::tcp_input(WritablePacket *p)
 			 */
 			tp->ts_recent = 0;
 		} else {
-			speaker()->_tcpstat.tcps_rcvduppack++;
-			speaker()->_tcpstat.tcps_rcvdupbyte += ti.ti_len;
-			speaker()->_tcpstat.tcps_pawsdrop++;
+			get_transport()->_tcpstat.tcps_rcvduppack++;
+			get_transport()->_tcpstat.tcps_rcvdupbyte += ti.ti_len;
+			get_transport()->_tcpstat.tcps_pawsdrop++;
 			goto dropafterack;
 		}
     }
@@ -423,6 +391,7 @@ TCPConnection::tcp_input(WritablePacket *p)
     /* 635 646 */ 
     /* Determine if we need to trim the head off of an incoming segment */ 
     todrop = tp->rcv_nxt - ti.ti_seq; 
+
 
 	// todrop is > 0 IF the incoming segment begins prior to the end of the last
 	// recieved segment (a.k.a. tp->rcv_nxt)
@@ -437,8 +406,8 @@ TCPConnection::tcp_input(WritablePacket *p)
 			todrop --; 
 		}
 		if (todrop >= ti.ti_len) { 
-			speaker()->_tcpstat.tcps_rcvduppack++; 
-			speaker()->_tcpstat.tcps_rcvdupbyte += ti.ti_len; 
+			get_transport()->_tcpstat.tcps_rcvduppack++; 
+			get_transport()->_tcpstat.tcps_rcvdupbyte += ti.ti_len; 
 
 			if ((tiflags & TH_FIN && todrop == ti.ti_len + 1)) {
 				todrop = ti.ti_len; 
@@ -449,10 +418,10 @@ TCPConnection::tcp_input(WritablePacket *p)
 					goto dropafterack; 
 			}
 		} else {
-			speaker()->_tcpstat.tcps_rcvpartduppack++;
-			speaker()->_tcpstat.tcps_rcvpartdupbyte += todrop;
+			get_transport()->_tcpstat.tcps_rcvpartduppack++;
+			get_transport()->_tcpstat.tcps_rcvpartdupbyte += todrop;
 		}
-		p->pull(todrop);
+		copy->pull(todrop);
 		ti.ti_seq += todrop;
 		ti.ti_len -= todrop;
 		if (ti.ti_urp > todrop) { 
@@ -468,7 +437,7 @@ TCPConnection::tcp_input(WritablePacket *p)
     /* drop after socket close */
     if (tp->t_state > TCPS_CLOSE_WAIT && ti.ti_len) { 
 		tcp_set_state(TCPS_CLOSED); 
-		speaker()->_tcpstat.tcps_rcvafterclose++; 
+		get_transport()->_tcpstat.tcps_rcvafterclose++; 
 		goto dropwithreset; 
     }	
 
@@ -476,9 +445,9 @@ TCPConnection::tcp_input(WritablePacket *p)
 	 * data (and PUSH and FIN); if nothing left, just ACK. */
 	todrop = (ti.ti_seq+ti.ti_len) - (tp->rcv_nxt+tp->rcv_wnd);
 	if (todrop > 0) {
-		speaker()->_tcpstat.tcps_rcvpackafterwin++;
+		get_transport()->_tcpstat.tcps_rcvpackafterwin++;
 		if (todrop >= ti.ti_len) {
-			speaker()->_tcpstat.tcps_rcvbyteafterwin += ti.ti_len;
+			get_transport()->_tcpstat.tcps_rcvbyteafterwin += ti.ti_len;
 			/*
 			 * If a new connection request is received
 			 * while in TIME_WAIT, drop the old connection
@@ -505,13 +474,13 @@ TCPConnection::tcp_input(WritablePacket *p)
 			 */
 			if (tp->rcv_wnd == 0 && ti.ti_seq == tp->rcv_nxt) {
 				tp->t_flags |= TF_ACKNOW;
-				speaker()->_tcpstat.tcps_rcvwinprobe++;
+				get_transport()->_tcpstat.tcps_rcvwinprobe++;
 			} else
 				goto dropafterack;
 		} else {
-			speaker()->_tcpstat.tcps_rcvbyteafterwin += todrop;
+			get_transport()->_tcpstat.tcps_rcvbyteafterwin += todrop;
 		}
-		p->pull(todrop); 
+		copy->pull(todrop); 
 		ti.ti_len -= todrop;
 		tiflags &= ~(TH_PUSH|TH_FIN);
 	}
@@ -522,7 +491,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 	if (ts_present && SEQ_LEQ(ti.ti_seq, tp->last_ack_sent) &&
 		SEQ_LT(tp->last_ack_sent, ti.ti_seq + ti.ti_len + 
 		((tiflags & (TH_SYN|TH_FIN)) != 0))) {
-		tp->ts_recent_age = speaker()->tcp_now();
+		tp->ts_recent_age = get_transport()->tcp_now();
 		tp->ts_recent = ts_val;
 	}
 
@@ -550,7 +519,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 			tp->so_error = ECONNRESET;
 		close:
 			tp->t_state = TCPS_CLOSED;
-			speaker()->_tcpstat.tcps_drops++;
+			get_transport()->_tcpstat.tcps_drops++;
 			tcp_set_state(TCPS_CLOSED);
 			goto drop;
 		case TCPS_CLOSING:
@@ -602,7 +571,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 
 	    if (SEQ_LEQ(ti.ti_ack, tp->snd_una)) { 
 			if (ti.ti_len == 0 && tiwin == tp->snd_wnd) {
-				speaker()->_tcpstat.tcps_rcvdupack++; 
+				get_transport()->_tcpstat.tcps_rcvdupack++; 
 				/*
 				 * If we have outstanding data (other than
 				 * a window probe), this is a completely
@@ -640,17 +609,17 @@ TCPConnection::tcp_input(WritablePacket *p)
 					tp->t_rtt = 0;
 					tp->snd_nxt = ti.ti_ack;
 					tp->snd_cwnd = tp->t_maxseg;
-					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, 3 dups, slowstart", SPKRNAME, speaker()->tcp_now(), tp->snd_cwnd);
+					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, 3 dups, slowstart", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd);
 					tcp_output();
 					tp->snd_cwnd = tp->snd_ssthresh + tp->t_maxseg *
 						tp->t_dupacks;
-					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, 3 dups, slowstart", SPKRNAME, speaker()->tcp_now(), tp->snd_cwnd );
+					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, 3 dups, slowstart", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd );
 					if (SEQ_GT(onxt, tp->snd_nxt)) 
 						tp->snd_nxt = onxt;
 					goto drop;
 				} else if (tp->t_dupacks > TCP_REXMT_THRESH) {
 					tp->snd_cwnd += tp->t_maxseg;
-					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, dups", SPKRNAME, speaker()->tcp_now(), tp->snd_cwnd );
+					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, dups", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd );
 					tcp_output();
 					goto drop;
 				}
@@ -663,24 +632,24 @@ TCPConnection::tcp_input(WritablePacket *p)
 	    if (tp->t_dupacks > TCP_REXMT_THRESH && 
 		    tp->snd_cwnd > tp->snd_ssthresh) {  
 			tp->snd_cwnd = tp->snd_ssthresh;
-			debug_output(VERB_TCP, "%u: cwnd: %u, reduced to ssthresh", speaker()->tcp_now(), tp->snd_cwnd );  
+			debug_output(VERB_TCP, "%u: cwnd: %u, reduced to ssthresh", get_transport()->tcp_now(), tp->snd_cwnd );  
 	    }
 	    tp->t_dupacks = 0; 
 
 	    if (SEQ_GT(ti.ti_ack, tp->snd_max)) { 
-			speaker()->_tcpstat.tcps_rcvacktoomuch++; 
+			get_transport()->_tcpstat.tcps_rcvacktoomuch++; 
 			goto dropafterack; 
 	    }
 	    acked = ti.ti_ack - tp->snd_una; 
-	    speaker()->_tcpstat.tcps_rcvackpack++; 
-	    speaker()->_tcpstat.tcps_rcvackbyte += acked; 
+	    get_transport()->_tcpstat.tcps_rcvackpack++; 
+	    get_transport()->_tcpstat.tcps_rcvackbyte += acked; 
 
 	    /* 903 */
 
-	   debug_output(VERB_TCP, "[%s] now: [%u]  RTT measurement: ts_present: %u, now: %u, ecr: %u", SPKRNAME, speaker()->tcp_now(), ts_present, speaker()->tcp_now(), ts_ecr); 
+	   debug_output(VERB_TCP, "[%s] now: [%u]  RTT measurement: ts_present: %u, now: %u, ecr: %u", SPKRNAME, get_transport()->tcp_now(), ts_present, get_transport()->tcp_now(), ts_ecr); 
 
 	    if (ts_present) 
-			tcp_xmit_timer(speaker()->tcp_now() - ts_ecr + 1); 
+			tcp_xmit_timer(get_transport()->tcp_now() - ts_ecr + 1); 
 	    else if (tp->t_rtt && SEQ_GT(ti.ti_ack, tp->t_rtseq))
 			tcp_xmit_timer( tp->t_rtt );
 
@@ -703,7 +672,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 		if (cw > tp->snd_ssthresh ) 
 		    incr = incr * incr / cw; 
 		tp->snd_cwnd = min(cw + incr, (u_int) TCP_MAXWIN << tp->snd_scale); 
-		debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, increase: %u", SPKRNAME, speaker()->tcp_now(), tp->snd_cwnd, incr); 		
+		debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, increase: %u", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd, incr); 		
 	    }
 
 	    /* 943 */
@@ -726,7 +695,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 	    switch (tp->t_state) { 
 		case TCPS_FIN_WAIT_1:
 		    if (ourfinisacked) { 
-				tp->t_timer[TCPT_2MSL] = speaker()->globals()->tcp_maxidle;
+				tp->t_timer[TCPT_2MSL] = get_transport()->globals()->tcp_maxidle;
 				tcp_set_state(TCPS_FIN_WAIT_2); 
 		    }
 		    break; 
@@ -735,7 +704,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 			if (ourfinisacked) {
 				tcp_set_state(TCPS_TIME_WAIT);  
 				tp->t_timer[TCPT_2MSL] = 2 * TCPTV_MSL;
-				if (_q_recv.push(p, ti.ti_seq, ti.ti_seq + ti.ti_len < 0)) {
+				if (_q_recv.push(copy, ti.ti_seq, ti.ti_seq + ti.ti_len < 0)) {
 					debug_output(VERB_ERRORS, "TCPClosing segment push into reassembly Queue FAILED");
 				}
 				
@@ -771,7 +740,7 @@ step6:
 
 		/* Keep track of pure window updates */
 		if (ti.ti_len == 0 && tp->snd_wl2 == ti.ti_ack && tiwin > tp->snd_wnd)
-			speaker()->_tcpstat.tcps_rcvwinupd++;
+			get_transport()->_tcpstat.tcps_rcvwinupd++;
 
 		tp->snd_wnd = tiwin; 
 		tp->snd_wl1 = ti.ti_seq; 
@@ -819,9 +788,9 @@ dodata:
 		/* _q_recv.push() corresponds to the tcp_reass function whose purpose is
 		 * to put all data into the TCPQueue for both possible reassembly and
 		 * in-order presentation to the "application socket" which in the
-		 * TCPSpeaker is the stateless pull port.
+		 * TCPget_transport is the stateless pull port.
 		 */
-		if (_q_recv.push(p, ti.ti_seq, ti.ti_seq + ti.ti_len) < 0) {
+		if (_q_recv.push(copy, ti.ti_seq, ti.ti_seq + ti.ti_len) < 0) {
 			debug_output(VERB_ERRORS, "Slow Path segment push into reassembly Queue FAILED");
 		}	
 		
@@ -839,6 +808,7 @@ dodata:
 		// TODO len calculation @Harald: What exactly needs to be done?
 		len = ti.ti_len; 
     } else {
+		copy -> kill();
 		p->kill();
 		tiflags &= ~TH_FIN;
     }
@@ -869,7 +839,7 @@ dodata:
 
 			break;
 		case TCPS_TIME_WAIT:
-			debug_output(VERB_TCP, "%u: TIME_WAIT", speaker()->tcp_now());
+			debug_output(VERB_TCP, "%u: TIME_WAIT", get_transport()->tcp_now());
 			tp->t_timer[TCPT_2MSL] = 2 * TCPTV_MSL;
 			break;
 		}
@@ -887,7 +857,8 @@ dropafterack:
 	/* Drop incoming segment and send an ACK. */
 	if (tiflags & TH_RST)
 		goto drop;
-	p->kill(); 
+	copy -> kill();
+	p->kill();
 	tp->t_flags |= TF_ACKNOW;
 	tcp_output(); 
 	return;
@@ -910,6 +881,7 @@ dropwithreset:
 
 drop:
     debug_output(VERB_TCP, "[%s] tcpcon::input drop", SPKRNAME); 
+	copy -> kill();
     p->kill();
     return ;
 }
@@ -926,8 +898,10 @@ TCPConnection::tcp_output()
     unsigned 	optlen, hdrlen;
     u_char		opt[MAX_TCPOPTLEN];
     long		len, win;
-    click_tcp 	*ti;
+    click_tcp 	ti;
     WritablePacket *p;
+    WritablePacket *tcp_payload = NULL;
+
 
 	for (int i=0; i < MAX_TCPOPTLEN; i++) {
 		opt[i] = 0;
@@ -937,7 +911,7 @@ TCPConnection::tcp_output()
     idle = (tp->snd_max == tp->snd_una);
     if (idle && tp->t_idle >= tp->t_rxtcur) { 
        tp->snd_cwnd = tp->t_maxseg;
-       debug_output(VERB_TCP, "[%s] now: [%u] cnwd: %u, been idle", SPKRNAME, speaker()->tcp_now()); 
+       debug_output(VERB_TCP, "[%s] now: [%u] cnwd: %u, been idle", SPKRNAME, get_transport()->tcp_now()); 
     }
 
 	// TCP FIFO (Addresses (and seq num) decrease in this dir ->)
@@ -1072,7 +1046,7 @@ send:
 		debug_output(VERB_DEBUG, "[%s] timestamp: SETTING TIMESTAMP", SPKRNAME);
 		u_long *lp = (u_long*) (opt + optlen); 
 		*lp++ = htonl(TCPOPT_TSTAMP_HDR); 
-		*lp++ = htonl(speaker()->tcp_now()); 
+		*lp++ = htonl(get_transport()->tcp_now()); 
 		*lp++ = htonl(tp->ts_recent); 
 		optlen += TCPOLEN_TSTAMP_APPA; 
     } else { 
@@ -1101,17 +1075,17 @@ send:
 			len = p->length(); 
 			sendalot = 1; 
 		}
-		p = p->push( sizeof(click_ip) + sizeof(click_tcp) + optlen); 
+		// p = p->push( sizeof(click_ip) + sizeof(click_tcp) + optlen); 
 
 	/*317*/
     } else { 
-		p = Packet::make(sizeof(click_ip) + sizeof(click_tcp) + optlen);
+    	// empty packet??
+		// p = Packet::make(sizeof(click_ip) + sizeof(click_tcp) + optlen);
 		/* TODO: errorhandling */
     }
-    ti = reinterpret_cast<click_tcp *>(p->data() + sizeof(click_ip));
 	
-    ti->th_sport = flowid()->dport(); 
-    ti->th_dport = flowid()->sport(); 
+    ti.th_sport = flowid()->sport(); 
+    ti.th_dport = flowid()->dport(); 
 
     /*339*/
     if (flags & TH_FIN && tp->t_flags & TF_SENTFIN && 
@@ -1120,17 +1094,17 @@ send:
 
 	// @Harald: Is there a reason that the persist timer was not being checked?
 	if (len || (flags & (TH_SYN | TH_FIN)) || tp->t_timer[TCPT_PERSIST]) 
-		ti->th_seq = htonl(tp->snd_nxt); 
+		ti.th_seq = htonl(tp->snd_nxt); 
     else 
-		ti->th_seq = htonl(tp->snd_max);
+		ti.th_seq = htonl(tp->snd_max);
 
-    ti->th_ack = htonl(tp->rcv_nxt);
+    ti.th_ack = htonl(tp->rcv_nxt);
 
     if (optlen) {
-		memcpy((ti + 1), opt, optlen); 
+		memcpy((&ti + 1), opt, optlen); 
     } 
-    ti->th_off = (sizeof(click_tcp) + optlen) >> 2;
-    ti->th_flags = flags; 
+    ti.th_off = (sizeof(click_tcp) + optlen) >> 2;
+    ti.th_flags = flags; 
 
     /*370*/
     /* receiver window calculations */ 
@@ -1144,11 +1118,11 @@ send:
 		win = (long) (tp->rcv_adv - tp->rcv_nxt); 
 
 	// Set the tcp header window size we will advertisement
-    ti->th_win = htons((u_short) (win >> tp->rcv_scale)) ;
+    ti.th_win = htons((u_short) (win >> tp->rcv_scale)) ;
 
     if (SEQ_GT(tp->snd_up, tp->snd_nxt)) { 
-		ti->th_urp = htons((u_short) (tp->snd_up - tp->snd_nxt) ); 
-		ti->th_flags |= TH_URG; 
+		ti.th_urp = htons((u_short) (tp->snd_up - tp->snd_nxt) ); 
+		ti.th_flags |= TH_URG; 
     } else { 
 		tp->snd_up = tp->snd_una; 
     }
@@ -1178,7 +1152,7 @@ send:
 
 		if (tp->t_timer[TCPT_REXMT] == 0 && tp->snd_nxt != tp->snd_una) {
 			tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
-			debug_output(VERB_TCP, "[%s] now: [%u] REXMT set to %u == %f", SPKRNAME, speaker()->tcp_now(), tp->t_timer[TCPT_REXMT], tp->t_timer[TCPT_REXMT]*0.5 );
+			debug_output(VERB_TCP, "[%s] now: [%u] REXMT set to %u == %f", SPKRNAME, get_transport()->tcp_now(), tp->t_timer[TCPT_REXMT], tp->t_timer[TCPT_REXMT]*0.5 );
 			if (tp->t_timer[TCPT_PERSIST]) {
 				tp->t_timer[TCPT_PERSIST] = 0;
 				tp->t_rxtshift = 0;
@@ -1191,7 +1165,21 @@ send:
 
 	// THE MAGIC MOMENT! Our beloved tcp data segment goes to be wrapped in IP and
 	// sent to its tcp-speaking destination :-)
-    ip_output(p);
+	//Add XIA headers
+	XIAHeaderEncap xiah;
+	xiah.set_nxt(CLICK_XIA_NXT_TRN);
+	xiah.set_last(LAST_NODE_DEFAULT);
+	// xiah.set_hlim(hlim.get(_sport));
+	xiah.set_dst_path(dst_path());
+	xiah.set_src_path(src_path());
+
+	TransportHeaderEncap *send_hdr = TransportHeaderEncap::MakeTCPHeader(&ti);
+	tcp_payload = send_hdr->encap(p);
+	send_hdr -> update();
+	xiah.set_plen(p -> length() + send_hdr->hlen()); // XIA payload = transport header + transport-layer data
+	tcp_payload = xiah.encap(tcp_payload, false);
+	delete send_hdr;
+	get_transport().output(NETWORK_PORT).push(tcp_payload);
 
 
 	/* Data has been sent out at this point. If we advertised a positive window
@@ -1215,16 +1203,11 @@ send:
 void
 TCPConnection::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 {
-	int tlen; 
-
-	WritablePacket *p = Packet::make(sizeof(click_ip) + sizeof(click_tcp)); 
-	p->set_network_header(p->data(), sizeof(click_ip)); 
-	click_tcp *th = p->tcp_header(); 
+	click_tcp th;
 
 	int win = min(so_recv_buffer_space(),  TCP_MAXWIN << tp->rcv_scale); 
 
 	if (! (flags & TH_RST)) {
-	    tlen = 0; 
 	    flags = TH_ACK; 
 	    th->th_win = htons((u_short)(win >> tp->rcv_scale)); 
 		
@@ -1233,16 +1216,31 @@ TCPConnection::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 	}
 	
 /*	setports(th->th_sport, _con_id._ports); */
-	th->th_dport = flowid()->sport(); 
-	th->th_sport = flowid()->dport(); 
-	th->th_flags2 = 0; 
-	th->th_seq =   htonl(seq); 
-	th->th_ack =   htonl(ack); 
-	th->th_flags = flags; 
-	th->th_urp = 0; 
-	th->th_sum = 0; 
-	th->th_off = (sizeof(click_tcp)) >> 2;
-	ip_output(p); 
+	th.th_dport = flowid()->dport(); 
+	th.th_sport = flowid()->sport(); 
+	th.th_flags2 = 0; 
+	th.th_seq =   htonl(seq); 
+	th.th_ack =   htonl(ack); 
+	th.th_flags = flags; 
+	th.th_urp = 0; 
+	th.th_sum = 0; 
+	th.th_off = (sizeof(click_tcp)) >> 2;
+
+	WritablePacket *p = NULL;
+	//Add XIA headers
+	XIAHeaderEncap xiah_new;
+	xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+	xiah_new.set_last(LAST_NODE_DEFAULT);
+	xiah_new.set_hlim(HLIM_DEFAULT);
+	xiah_new.set_dst_path(dst_path());
+	xiah_new.set_src_path(src_path());
+	TransportHeaderEncap *tcph = TransportHeaderEncap::MakeTCPHeader(&th);
+	p = tcph -> encap(NULL);
+	tcph -> update();
+	xiah_new.set_plen(tcph->hlen());
+	p = xiah_new.encap(p, false);
+	delete tcph;
+	get_transport().output(NETWORK_PORT).push(p);
 }
 
 tcp_seq_t
@@ -1265,7 +1263,7 @@ TCPConnection::slowtimo() {
 	int i; 
 	debug_output(VERB_TIMERS, "[%s] now: [%u] Timers: %s %d %s %d %s %d %s %d %s %d", 
 	SPKRNAME,
-	speaker()->tcp_now(), 
+	get_transport()->tcp_now(), 
 	tcptimers[0], tp->t_timer[0], 
 	tcptimers[1], tp->t_timer[1], 
 	tcptimers[2], tp->t_timer[2], 
@@ -1273,12 +1271,12 @@ TCPConnection::slowtimo() {
 	tcptimers[4], tp->t_timer[4] );  
 
 	for ( i = 0; i < TCPT_NTIMERS; i++ ) { 
-	  // debug_output(VERB_TCP, "%u: TCPConnection::slowtimo: %s %d\n", speaker()->tcp_now(), tcptimers[i], tp->t_timer[i]); 
+	  // debug_output(VERB_TCP, "%u: TCPConnection::slowtimo: %s %d\n", get_transport()->tcp_now(), tcptimers[i], tp->t_timer[i]); 
 		if ( tp->t_timer[i] && --(tp->t_timer[i]) == 0) { 
-		  StringAccum sa;
-		  sa << *(flowid()); 
+		  // StringAccum sa;
+		  // sa << *(flowid()); 
 
-		    debug_output(VERB_TIMERS, "[%s] now: [%u] TIMEOUT %s: %s, now: %u", SPKRNAME, speaker()->tcp_now(), sa.c_str(), tcptimers[i], speaker()->tcp_now()); 
+		  //   debug_output(VERB_TIMERS, "[%s] now: [%u] TIMEOUT %s: %s, now: %u", SPKRNAME, get_transport()->tcp_now(), sa.c_str(), tcptimers[i], get_transport()->tcp_now()); 
 		    tcp_timers(i); 
 		} 
 	}
@@ -1298,8 +1296,8 @@ TCPConnection::tcp_timers (int timer) {
 		/*127*/
 		case TCPT_2MSL:
 		  if (tp->t_state != TCPS_TIME_WAIT && 
-		      tp->t_idle <= speaker()->globals()->tcp_maxidle) 
-		    tp->t_timer[TCPT_2MSL] = speaker()->globals()->tcp_keepintvl; 
+		      tp->t_idle <= get_transport()->globals()->tcp_maxidle) 
+		    tp->t_timer[TCPT_2MSL] = get_transport()->globals()->tcp_keepintvl; 
 		  else
 		    tcp_set_state(TCPS_CLOSED); 
 		  break; 
@@ -1314,17 +1312,17 @@ TCPConnection::tcp_timers (int timer) {
 		    goto dropit; 
 		  if ( tp->so_flags & SO_KEEPALIVE && 
 		       tp->t_state <= TCPS_CLOSE_WAIT) { 
-		    if (tp->t_idle >= speaker()->globals()->tcp_keepidle + 
-			speaker()->globals()->tcp_maxidle) 
+		    if (tp->t_idle >= get_transport()->globals()->tcp_keepidle + 
+			get_transport()->globals()->tcp_maxidle) 
 			goto dropit;
-			speaker()->_tcpstat.tcps_keepprobe++; 
+			get_transport()->_tcpstat.tcps_keepprobe++; 
 			tcp_respond(tp->rcv_nxt, tp->snd_una, 0); 
-			tp->t_timer[TCPT_KEEP] = speaker()->globals()->tcp_keepintvl; 
+			tp->t_timer[TCPT_KEEP] = get_transport()->globals()->tcp_keepintvl; 
 		  } else
-		    tp->t_timer[TCPT_KEEP] = speaker()->globals()->tcp_keepidle; 
+		    tp->t_timer[TCPT_KEEP] = get_transport()->globals()->tcp_keepidle; 
 		  break; 
 dropit:
-		  speaker()->_tcpstat.tcps_keepdrops++; 
+		  get_transport()->_tcpstat.tcps_keepdrops++; 
 		  tcp_drop(ETIMEDOUT); 
 		  //todo this should go to close and not to drop
 
@@ -1356,7 +1354,7 @@ dropit:
 		    if ( win < 2 )
 			win = 2; 
 		    tp->snd_cwnd = tp->t_maxseg; 
-		    debug_output(VERB_TCP, "%u: cwnd: %u, TCPT_REXMT", speaker()->tcp_now(), tp->snd_cwnd); 
+		    debug_output(VERB_TCP, "%u: cwnd: %u, TCPT_REXMT", get_transport()->tcp_now(), tp->snd_cwnd); 
 		    tp->snd_ssthresh = win * tp->t_maxseg;
 		    tp->t_dupacks = 0 ; 
 		    }
@@ -1395,9 +1393,9 @@ TCPConnection::tcp_setpersist() {
 void 
 TCPConnection::tcp_xmit_timer(short rtt) { 
 	short delta; 
-	speaker()->_tcpstat.tcps_rttupdated++; 
+	get_transport()->_tcpstat.tcps_rttupdated++; 
 	
-	debug_output(VERB_TIMERS, "[%s] now: [%u]: tcp_xmit_timer: srtt [%d] cur rtt [%d]\n", SPKRNAME, speaker()->tcp_now(), tp->t_srtt, rtt); 
+	debug_output(VERB_TIMERS, "[%s] now: [%u]: tcp_xmit_timer: srtt [%d] cur rtt [%d]\n", SPKRNAME, get_transport()->tcp_now(), tp->t_srtt, rtt); 
 	if (tp->t_srtt != 0) {
 		/*
 		 * srtt is stored as fixed point with 3 bits after the
@@ -1449,7 +1447,7 @@ TCPConnection::tcp_xmit_timer(short rtt) {
 	 */
 	TCPT_RANGESET(tp->t_rxtcur, TCP_REXMTVAL(tp),
 	    tp->t_rttmin, TCPTV_REXMTMAX);
-	debug_output(VERB_TCP, "[%s] now: [%u]: rxt_cur: %u, RXMTVAL: %u, rttmin: %u, RXMTMAX: %u \n", SPKRNAME, speaker()->tcp_now(), tp->t_rxtcur, TCP_REXMTVAL(tp), tp->t_rttmin,TCPTV_REXMTMAX ); 
+	debug_output(VERB_TCP, "[%s] now: [%u]: rxt_cur: %u, RXMTVAL: %u, rttmin: %u, RXMTMAX: %u \n", SPKRNAME, get_transport()->tcp_now(), tp->t_rxtcur, TCP_REXMTVAL(tp), tp->t_rttmin,TCPTV_REXMTMAX ); 
 	
 	/*
 	 * We received an ack for a packet that wasn't retransmitted;
@@ -1473,7 +1471,7 @@ TCPConnection::tcp_drop(int err)
 
 u_int
 TCPConnection::tcp_mss(u_int offer) { 
-	unsigned glbmaxseg = speaker()->_tcp_globals.tcp_mssdflt;
+	unsigned glbmaxseg = get_transport()->_tcp_globals.tcp_mssdflt;
 	/* FIXME sensible mss function */ 
 	u_int mss ;
 	if (offer) { 
@@ -1483,111 +1481,10 @@ TCPConnection::tcp_mss(u_int offer) {
 	}
 	tp->t_maxseg = mss;
 	tp->snd_cwnd = mss; 
-	debug_output(VERB_TCP, "[%s] now: [%u] cnwd: [%u] rcvd_offer: [%u] tcp_mss: [%u]", SPKRNAME, speaker()->tcp_now(), tp->snd_cwnd, offer, tp->t_maxseg); 
+	debug_output(VERB_TCP, "[%s] now: [%u] cnwd: [%u] rcvd_offer: [%u] tcp_mss: [%u]", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd, offer, tp->t_maxseg); 
 
 	return mss; 
 }
-
-
-/* Take a segment from q_recv FIFO, wrap it in stateless tcp and ip headers */
-int
-TCPConnection::stateless_encap(WritablePacket *p)
-{ 
-    uint32_t hlen = sizeof(click_ip) + sizeof(click_tcp); 
-
-	// Push extra bytes for click ip and tcp headers onto a headerless packet
-    p = p->push(hlen); 
-    p->set_network_header(p->data(), sizeof(click_ip)); 
-
-    click_ip	*iph = p->ip_header(); 
-    click_tcp 	*tcph= p->tcp_header(); 
-
-    iph->ip_v = 4;
-    iph->ip_hl = 5;
-    iph->ip_tos = 0x00; 
-    iph->ip_len = htons(p->length());
-    iph->ip_id = speaker()->get_and_increment_ip_id();
-    iph->ip_off = htons(IP_DF);
-    iph->ip_ttl = 255;
-    iph->ip_p = IP_PROTO_TCP;
-    iph->ip_sum = 0 ; 
-	
-	
-	/* BUG: on arm (i.e. Openwrt on Avilas), the assignement operation below
-	 * causes a not-aligned memory access. Example: if flowid()->saddr() returns
-	 * 10.1.2.3 => 2.3.10.1 will be the value in iph->ip_src
-	 * run with VERB_DEBUG output for more details - this is fixed by using
-	 * echo 2 > /proc/cpu/alignment on OpenWRT
-	 */
-
-    iph->ip_src = flowid()->saddr(); 
-    iph->ip_dst = flowid()->daddr(); 
-
-    p->set_dst_ip_anno(IPAddress(iph->ip_dst));
-
-	/* Zero out the tcph */
-    memset(tcph, 0, sizeof(click_tcp)); 
-
-	// tp->t_sl_flags = [stateless tcp flags from tcpcb]
-	// The idea here is that we have a stateless tcp flag in the stateless tcp
-	// header, which can indicate signalling between tcpspeakers. These flags
-	// are written to the packet here. 
-    //tcph->th_flags = tp->t_sl_flags; 
-    tcph->th_sport = flowid()->sport(); 
-    tcph->th_dport = flowid()->dport(); 
-    tcph->th_off = sizeof(click_tcp) >> 2; 
-
-    /*TODO: set window-size to free space in _q_usr_input */
-    /*TODO: set flags */ 
-    /*TODO: support mss */ 
-    return 0; 
-}
-
-
-
-/* Take a stateless packet from the mesh, and remove its ip and (either tcp or)
- * udp headers. If the payload of the packet is 0 bytes, we have decapsulated a
- * stateless signaling packet, and we should process the header accordingly. We
- * return the length of the payload of the packet. Length 0 means that the
- * packet has no payload, only stateless headers.
- */
-int
-TCPConnection::stateless_decap(WritablePacket *p) { 
-
-	if (! p->network_header()) 
-	    return 0;
-
-	unsigned int hlen = 0;
-	hlen += sizeof(click_ip);
-	
-	switch (p->ip_header()->ip_p) { 
-		case IP_PROTO_TCP: 
-			hlen += (p->tcp_header()->th_off << 2); 
-			break; 
-		case IP_PROTO_UDP: 
-			hlen += sizeof(click_udp); 
-			break; 
-	}
-
-	// Set any stateless syn/fin/rst flags
-	//tp->t_sl_flags &= p->tcp_header()->th_flags;
-
-	/* Packet has payload */ 
-	if (hlen < p->length()) {
-	    p->pull(hlen); 
-	    return hlen; 
-	/* Payloadless signal packet */ 
-	} else if (hlen == p->length()) { 
-		debug_output(VERB_TCP, "[%s] tcpcon::st_decap recieved a payloadless tcp segment (probably a signal segment)", SPKRNAME);
-	    p->kill(); 
-		p = NULL;
-	    return 0; 
-	} else {
-		// EINVAL means Error Invalid. man errno :-)
-	    return -EINVAL; 
-	}
-}
-
 
 /* Recieves a stateless mesh packet, passess it to have its headers removed, and
  * then if the packet has a payload, pushes it into the FIFO to be pushed to the
@@ -1606,19 +1503,12 @@ TCPConnection::usrsend(WritablePacket *p)
 
     if (tp->so_flags & SO_FIN_AFTER_UDP_IDLE) {
 		debug_output(VERB_TIMERS, "[%s] tcpcon::usrsend setting timer TCPT_IDLE to [%d]", 
-			SPKRNAME, speaker()->globals()->so_idletime); 
-		tp->t_timer[TCPT_IDLE] = speaker()->globals()->so_idletime;  
+			SPKRNAME, get_transport()->globals()->so_idletime); 
+		tp->t_timer[TCPT_IDLE] = get_transport()->globals()->so_idletime;  
 	}
 
 	// the stateless tcp flags field from the recieved stateless packet
 	int retval = 0 ; 
-	retval = stateless_decap(p); 
-
-	// A problem occurred while removing the stateless packet header
-    if (retval < 0) {
-		debug_output(VERB_ERRORS, "[%s] TCPConnection::stateless_decap returned an error: [%d]", SPKRNAME, retval);
-		return retval; 
-	}
  
 	// If we were closed or listening, we will have to send a SYN 
     if ((tp->t_state == TCPS_CLOSED) || (tp->t_state == TCPS_LISTEN)) {
@@ -1633,8 +1523,7 @@ TCPConnection::usrsend(WritablePacket *p)
 		usrclosed();
 	}
 
-	// The packet was successfully decapsulated
-	if (p && retval > 0) {
+	if (p) {
 		retval = _q_usr_input.push(p); 
 	}
 
@@ -1693,17 +1582,17 @@ TCPConnection::initialize(const int port)
 } */
 
 
-MFHState
-TCPConnection::set_state(const MFHState new_state, const int input) { 
+HandlerState
+TCPConnection::set_state(const HandlerState new_state, const int input) { 
 	
-	MFHState old_state = handler_state(); 
+	HandlerState old_state = get_state(); 
 	if ( old_state == new_state) 
 	    return old_state; 
 
-	MultiFlowHandler::set_state(new_state, input); 
+	GenericConnHandler::set_state(new_state); 
 	
 
-	if ((old_state == CREATE) && new_state == (INITIALIZE) && input == 1)
+	if ((old_state == CREATE) && new_state == (INITIALIZE))
 	    usropen(); 
 
 	if ((new_state == SHUTDOWN) && tcp_state() <= TCPS_ESTABLISHED) 
@@ -1714,163 +1603,127 @@ TCPConnection::set_state(const MFHState new_state, const int input) {
 	    /* tcp_output(); */
 	} 
 
-	return handler_state(); 
+	return get_state(); 
 } 
 
+// NOT SURE WE NEED THIS
+// void 
+// TCPConnection::_tcp_dooptions(u_char *cp, int cnt, const TransportHeader * ti, 
+// 	int * ts_present, u_long *ts_val, u_long *ts_ecr) 
+// { 
+// 	uint16_t mss;
+// 	int opt, optlen; 
+// 	optlen = 0; 
 
-void 
-TCPConnection::ip_output(WritablePacket *p) { 
+// 	debug_output(VERB_DEBUG, "[%s] tcp_dooption cnt [%u]\n", SPKRNAME, cnt);
+// 	for (; cnt > 0; cnt -= optlen, cp += optlen) { 
 
-    click_ip * iph = reinterpret_cast<click_ip *>(p->data());
+// 		debug_output(VERB_DEBUG, "[%s] processing opt: optlen:<%u>,cnt:<%u>", SPKRNAME, 
+// 				optlen, cnt);
+// 		opt = cp[0]; 
+// 		if (opt == TCPOPT_EOL) {
+// 			debug_output(VERB_DEBUG, "b1");
+// 			break; 
+// 		}
+// 		if (opt == TCPOPT_NOP) 
+// 			optlen = 1; 
+// 		else {
+// 			if (cnt < 2){
+// 				debug_output(VERB_DEBUG, "b2");
+// 				break; 
+// 			}
+// 			optlen = cp[1]; 
+// 			if (optlen < 1 || optlen > cnt ) {
+// 				debug_output(VERB_DEBUG, "b3, optlen: [%x] cnt: [%x]", optlen, cnt);
+// 				break;
+// 			}
+// 		}
+// 		debug_output(VERB_DEBUG, "[%s] doopts: Entering options switch stmt, optlen [%x]", SPKRNAME, optlen);
+// 		switch (opt) { 
+// 			case TCPOPT_MAXSEG:
+// 					debug_output(VERB_DEBUG, "[%s] doopts: case MAXSEG", SPKRNAME);
+// 				if (optlen != TCPOLEN_MAXSEG) {
+// 					debug_output(VERB_DEBUG, "[%s] doopts: optlen: [%x] maxseg: [%x]", SPKRNAME, optlen, TCPOLEN_MAXSEG);
+// 					continue;
+// 				}
+// 				if (!(ti->tcp_hdr.th_flags & TH_SYN)) {
+// 					debug_output(VERB_DEBUG, "[%s] tcp_dooption SYN flag not set", SPKRNAME);
+// 					continue;
+// 				}
+// 				memcpy((char*) &mss, (char*) cp + 2, sizeof(mss)); 
+// 				//debug_output(VERB_DEBUG, "[%s] doopts: mss p0: [%x]", SPKRNAME, mss);
+// 				mss = ntohs(mss); 
+// 				//debug_output(VERB_DEBUG, "[%s] doopts: mss p1: [%x]", SPKRNAME, mss);
+// 				tcp_mss(mss); 
+// //				tp->t_maxseg = ntohs((u_short)*((char*)cp + 2)); //BUG WHY are we
+// //				setting this twice? once here and once in the line above?!
+// //				debug_output(VERB_DEBUG, "[%s] doopts: mss p2: [%x]", SPKRNAME, mss);
+// 				//avila this is 5... something here is broken. statically
+// 				//setting MSS whenever it dips below 800
+// //				if (tp->t_maxseg < 800 || tp->t_maxseg > 1460) {
+// //					tp->t_maxseg = 1400;
+// //					debug_output(VERB_ERRORS, "doopts: Recieved MAXSEG value [%d], setting to 1400", tp->t_maxseg);
+// //				}
+// 				break;
 
-    iph->ip_v = 4;
-    iph->ip_hl = 5;
-    iph->ip_tos = 0x00; 
-    iph->ip_len = htons(p->length());
-    iph->ip_id = speaker()->get_and_increment_ip_id();
-    iph->ip_off = htons(IP_DF);
-    iph->ip_ttl = 255;
-    iph->ip_p = IP_PROTO_TCP;
-    iph->ip_sum = 0 ; 
+// 			case TCPOPT_TIMESTAMP:
+// 				debug_output(VERB_DEBUG, "[%s] doopts: case TIMESTAMP", SPKRNAME);
+// 				if (optlen != TCPOLEN_TIMESTAMP)
+// 					continue;
+// 				*ts_present = 1; 
+// 				bcopy((char *)cp + 2, (char *)ts_val, sizeof(*ts_val)); //FIXME: Misaligned
+// 				*ts_val = ntohl(*ts_val); 
+// 				bcopy((char *)cp + 6, (char *)ts_ecr, sizeof(*ts_ecr)); //FIXME: Misaligned
+// 				*ts_ecr = ntohl(*ts_ecr); 
 
-
-//    debug_output(VERB_DEBUG, "[%s] tcpcon::ip_output before srcip [%s]", SPKRNAME, flowid()->daddr().unparse().c_str()); 
-//    debug_output(VERB_DEBUG, "[%s] tcpcon::ip_output before dstip [%s]", SPKRNAME, flowid()->saddr().unparse().c_str()); 
-
-    iph->ip_src = flowid()->daddr(); 
-    iph->ip_dst = flowid()->saddr(); 
-
-//    debug_output(VERB_DEBUG, "[%s] tcpcon::ip_output after srcip [%s]", SPKRNAME, IPAddress(iph->ip_src).unparse().c_str()); 
-//    debug_output(VERB_DEBUG, "[%s] tcpcon::ip_output after dstip [%s]", SPKRNAME, IPAddress(iph->ip_dst).unparse().c_str()); 
-
-
-    p->set_dst_ip_anno(IPAddress(iph->ip_dst));
-    p->set_ip_header(iph, sizeof(click_ip));
-    /*  transition to dispatching methods
-        speaker()->output(1).push(p);
-    */
-	print_tcpstats(p, "tcp_output");
-    output(1).push(p); 
-}
-
-
-void 
-TCPConnection::_tcp_dooptions(u_char *cp, int cnt, const click_tcp * ti, 
-	int * ts_present, u_long *ts_val, u_long *ts_ecr) 
-{ 
-	uint16_t mss;
-	int opt, optlen; 
-	optlen = 0; 
-
-	debug_output(VERB_DEBUG, "[%s] tcp_dooption cnt [%u]\n", SPKRNAME, cnt);
-	for (; cnt > 0; cnt -= optlen, cp += optlen) { 
-
-		debug_output(VERB_DEBUG, "[%s] processing opt: optlen:<%u>,cnt:<%u>", SPKRNAME, 
-				optlen, cnt);
-		opt = cp[0]; 
-		if (opt == TCPOPT_EOL) {
-			debug_output(VERB_DEBUG, "b1");
-			break; 
-		}
-		if (opt == TCPOPT_NOP) 
-			optlen = 1; 
-		else {
-			if (cnt < 2){
-				debug_output(VERB_DEBUG, "b2");
-				break; 
-			}
-			optlen = cp[1]; 
-			if (optlen < 1 || optlen > cnt ) {
-				debug_output(VERB_DEBUG, "b3, optlen: [%x] cnt: [%x]", optlen, cnt);
-				break;
-			}
-		}
-		debug_output(VERB_DEBUG, "[%s] doopts: Entering options switch stmt, optlen [%x]", SPKRNAME, optlen);
-		switch (opt) { 
-			case TCPOPT_MAXSEG:
-					debug_output(VERB_DEBUG, "[%s] doopts: case MAXSEG", SPKRNAME);
-				if (optlen != TCPOLEN_MAXSEG) {
-					debug_output(VERB_DEBUG, "[%s] doopts: optlen: [%x] maxseg: [%x]", SPKRNAME, optlen, TCPOLEN_MAXSEG);
-					continue;
-				}
-				if (!(ti->th_flags & TH_SYN)) {
-					debug_output(VERB_DEBUG, "[%s] tcp_dooption SYN flag not set", SPKRNAME);
-					continue;
-				}
-				memcpy((char*) &mss, (char*) cp + 2, sizeof(mss)); 
-				//debug_output(VERB_DEBUG, "[%s] doopts: mss p0: [%x]", SPKRNAME, mss);
-				mss = ntohs(mss); 
-				//debug_output(VERB_DEBUG, "[%s] doopts: mss p1: [%x]", SPKRNAME, mss);
-				tcp_mss(mss); 
-//				tp->t_maxseg = ntohs((u_short)*((char*)cp + 2)); //BUG WHY are we
-//				setting this twice? once here and once in the line above?!
-//				debug_output(VERB_DEBUG, "[%s] doopts: mss p2: [%x]", SPKRNAME, mss);
-				//avila this is 5... something here is broken. statically
-				//setting MSS whenever it dips below 800
-//				if (tp->t_maxseg < 800 || tp->t_maxseg > 1460) {
-//					tp->t_maxseg = 1400;
-//					debug_output(VERB_ERRORS, "doopts: Recieved MAXSEG value [%d], setting to 1400", tp->t_maxseg);
-//				}
-				break;
-
-			case TCPOPT_TIMESTAMP:
-				debug_output(VERB_DEBUG, "[%s] doopts: case TIMESTAMP", SPKRNAME);
-				if (optlen != TCPOLEN_TIMESTAMP)
-					continue;
-				*ts_present = 1; 
-				bcopy((char *)cp + 2, (char *)ts_val, sizeof(*ts_val)); //FIXME: Misaligned
-				*ts_val = ntohl(*ts_val); 
-				bcopy((char *)cp + 6, (char *)ts_ecr, sizeof(*ts_ecr)); //FIXME: Misaligned
-				*ts_ecr = ntohl(*ts_ecr); 
-
-				debug_output(VERB_DEBUG, "[%s] doopts: ts_val [%u] ts_ecr [%u]", SPKRNAME, *ts_val, *ts_ecr);
-				if (ti->th_flags & TH_SYN) { 
-					debug_output(VERB_DEBUG, "[%s] doopts: recvd a SYN timetamp, ENABLING TIMESTAMPS", SPKRNAME);
-					tp->t_flags |= TF_RCVD_TSTMP; 
-					tp->ts_recent = *ts_val; 
-					tp->ts_recent_age = speaker()->tcp_now(); 
-				}
-				break;
-#ifdef UNDEF 
-			case TCPOPT_SACK_PERMITTED:
-				debug_output(VERB_DEBUG, "[%s] doopts: case SACK", SPKRNAME);
-				if (optlen != TCPOLEN_SACK_PERMITTED)
-					continue;
-				if (!(flags & TO_SYN))
-					continue;
-				if (!tcp_do_sack)
-					continue;
-				to->to_flags |= TOF_SACKPERM;
-				break;
-				case TCPOPT_SACK:
-				if (optlen <= 2 || (optlen - 2) % TCPOLEN_SACK != 0)
-					continue;
-				if (flags & TO_SYN)
-					continue;
-				to->to_flags |= TOF_SACK;
-				to->to_nsacks = (optlen - 2) / TCPOLEN_SACK;
-				to->to_sacks = cp + 2;
-				tcpstat.tcps_sack_rcv_blocks++;
-				break;
-#endif 
-			case TCPOPT_WSCALE:
-				debug_output(VERB_DEBUG, "[%s] doopts: case WSCALE", SPKRNAME);
-				if (optlen != TCPOLEN_WSCALE) 
-					continue;
-				if (!(ti->th_flags & TH_SYN)) 
-					continue;
-				tp->t_flags |=  TF_RCVD_SCALE;
+// 				debug_output(VERB_DEBUG, "[%s] doopts: ts_val [%u] ts_ecr [%u]", SPKRNAME, *ts_val, *ts_ecr);
+// 				if (ti->tcp_hdr.th_flags & TH_SYN) { 
+// 					debug_output(VERB_DEBUG, "[%s] doopts: recvd a SYN timetamp, ENABLING TIMESTAMPS", SPKRNAME);
+// 					tp->t_flags |= TF_RCVD_TSTMP; 
+// 					tp->ts_recent = *ts_val; 
+// 					tp->ts_recent_age = get_transport()->tcp_now(); 
+// 				}
+// 				break;
+// #ifdef UNDEF 
+// 			case TCPOPT_SACK_PERMITTED:
+// 				debug_output(VERB_DEBUG, "[%s] doopts: case SACK", SPKRNAME);
+// 				if (optlen != TCPOLEN_SACK_PERMITTED)
+// 					continue;
+// 				if (!(flags & TO_SYN))
+// 					continue;
+// 				if (!tcp_do_sack)
+// 					continue;
+// 				to->to_flags |= TOF_SACKPERM;
+// 				break;
+// 				case TCPOPT_SACK:
+// 				if (optlen <= 2 || (optlen - 2) % TCPOLEN_SACK != 0)
+// 					continue;
+// 				if (flags & TO_SYN)
+// 					continue;
+// 				to->to_flags |= TOF_SACK;
+// 				to->to_nsacks = (optlen - 2) / TCPOLEN_SACK;
+// 				to->to_sacks = cp + 2;
+// 				tcpstat.tcps_sack_rcv_blocks++;
+// 				break;
+// #endif 
+// 			case TCPOPT_WSCALE:
+// 				debug_output(VERB_DEBUG, "[%s] doopts: case WSCALE", SPKRNAME);
+// 				if (optlen != TCPOLEN_WSCALE) 
+// 					continue;
+// 				if (!(ti->tcp_hdr.th_flags & TH_SYN)) 
+// 					continue;
+// 				tp->t_flags |=  TF_RCVD_SCALE;
 				
-				tp->requested_s_scale = min(cp[2], TCP_MAX_WINSHIFT); 
-				debug_output(VERB_DEBUG, "[%s] WSCALE set, flags [%x], req_s_sc [%x]\n", SPKRNAME,
-						tp->t_flags, tp->requested_s_scale );
-				break;
-			default: 
-			continue; 
-		}
-    }
-	debug_output(VERB_DEBUG, "[%s] doopts: finished", SPKRNAME);
-}
+// 				tp->requested_s_scale = min(cp[2], TCP_MAX_WINSHIFT); 
+// 				debug_output(VERB_DEBUG, "[%s] WSCALE set, flags [%x], req_s_sc [%x]\n", SPKRNAME,
+// 						tp->t_flags, tp->requested_s_scale );
+// 				break;
+// 			default: 
+// 			continue; 
+// 		}
+//     }
+// 	debug_output(VERB_DEBUG, "[%s] doopts: finished", SPKRNAME);
+// }
 
 
 void
@@ -1884,7 +1737,7 @@ TCPConnection::print_state(StringAccum &sa)
 	sa.snprintf(80, "| Windows: rcv_adv: %u, rcv_wnd: %u, snd_cwnd: %u \n",
 		tp->rcv_adv, tp->rcv_wnd, tp->snd_cwnd); 
 	sa.snprintf(80, "| Timing: t_srtt: %u, t_rttvar: %u, now: %u\n",
-		tp->t_srtt, tp->t_rttvar, speaker()->tcp_now()); 
+		tp->t_srtt, tp->t_rttvar, get_transport()->tcp_now()); 
 
 	sa << ("| Timers: "); 
 	for(i=0; i<TCPT_NTIMERS; i++)
@@ -1901,10 +1754,10 @@ TCPConnection::tcp_newtcpcb()
 	    return NULL; 
 	
 	bzero((char*)tp, sizeof(tcpcb)); 
-	tp->t_maxseg = speaker()->globals()->tcp_mssdflt; 
+	tp->t_maxseg = get_transport()->globals()->tcp_mssdflt; 
 	tp->t_flags  = TF_REQ_SCALE | TF_REQ_TSTMP; 
 	tp->t_srtt   = TCPTV_SRTTBASE; 
-	tp->t_rttvar = speaker()->globals()->tcp_rttdflt * PR_SLOWHZ << 2;
+	tp->t_rttvar = get_transport()->globals()->tcp_rttdflt * PR_SLOWHZ << 2;
 	tp->t_rttmin = TCPTV_MIN; 
 	TCPT_RANGESET(tp->t_rxtcur, 
 		((TCPTV_SRTTBASE >> 2) + ( TCPTV_SRTTDFLT << 2)) >> 1, 
@@ -1916,54 +1769,54 @@ TCPConnection::tcp_newtcpcb()
 
 	tp->tcp_out_hdr_len = sizeof(click_tcp); 
 	tp->ip_out_hdr_len = sizeof(click_ip);
-	tp->so_flags = speaker()->globals()->so_flags; 
-	if (speaker()->globals()->window_scale) { 
+	tp->so_flags = get_transport()->globals()->so_flags; 
+	if (get_transport()->globals()->window_scale) { 
 		tp->t_flags &= TF_REQ_SCALE; 
-		tp->request_r_scale = speaker()->globals()->window_scale; 
+		tp->request_r_scale = get_transport()->globals()->window_scale; 
 	} 
-	if (speaker()->globals()->use_timestamp) { 
+	if (get_transport()->globals()->use_timestamp) { 
 		tp->t_flags &= TF_REQ_TSTMP; 
 	}
 	return tp; 
 }
 
 
-TCPConnection::TCPConnection(TCPSpeaker *s, const IPFlowID &id, const char dir)
-	: MultiFlowHandler(s,id,dir), _q_recv(this), _q_usr_input(this)
+TCPConnection::TCPConnection(XTRANSPORT *transport, const XIPFlowID &flowid)
+	: GenericConnHandler(transport, flowid, XSOCKET_STREAM), _q_recv(this), _q_usr_input(this)
 {
 
-    tp = tcp_newtcpcb();  
+    tp = tcp_newtcpcb();
     tp->t_state = TCPS_CLOSED;
-    _errh = speaker()->error_handler();
+    _errh = get_transport()->error_handler();
 
-    so_recv_buffer_size = speaker()->globals()->so_recv_buffer_size; 
+    so_recv_buffer_size = get_transport()->globals()->so_recv_buffer_size; 
     
     _so_state = 0; 
 
-    if (OUTGOING == dir) 
+    if (OUTGOING == dir) // need to modify
 	usropen(); 
 
     /*
     if (tp->so_flags & SO_FIN_AFTER_IDLE) { 
-	tp->idle_timeout = new Timer(TCPSpeaker::_tcp_timer_close, this);
-	tp->idle_timeout->initialize(speaker());
+	tp->idle_timeout = new Timer(TCPget_transport::_tcp_timer_close, this);
+	tp->idle_timeout->initialize(get_transport());
 	tp->idle_timeout->schedule_after_msec(tp->idle_wait_ms); 
     }
 
-    tp->timewait_timer = new Timer(TCPSpeaker::_tcp_timer_wait, this); 
-    tp->timewait_timer->initialize(speaker()); 
+    tp->timewait_timer = new Timer(TCPget_transport::_tcp_timer_wait, this); 
+    tp->timewait_timer->initialize(get_transport()); 
     */
-    if (dispatcher()->dispatch_code(true, 1) == 
-	    (MFD_DISPATCH_MFD_DIRECT | MFD_DISPATCH_PULL)) { 
-		debug_output(VERB_DISPATCH, "[%s].<%x> Creating _stateless_pull task", 
-			dispatcher()->name().c_str(), this); 
-		_stateless_pull = new Task(&pull_stateless_input, this); 
-		_stateless_pull->initialize(dispatcher()->router(), true); 
-    } 
+  //   if (dispatcher()->dispatch_code(true, 1) == 
+	 //    (MFD_DISPATCH_MFD_DIRECT | MFD_DISPATCH_PULL)) { 
+		// debug_output(VERB_DISPATCH, "[%s].<%x> Creating _stateless_pull task", 
+		// 	dispatcher()->name().c_str(), this); 
+		// _stateless_pull = new Task(&pull_stateless_input, this); 
+		// _stateless_pull->initialize(dispatcher()->router(), true); 
+  //   } 
 
-    StringAccum sa;
-    sa << *(flowid()); 
-    debug_output(VERB_STATES, "[%s] new connection %s %s", SPKRNAME, sa.c_str(), tcpstates[tp->t_state]); 
+    // StringAccum sa;
+    // sa << *(flowid()); 
+    // debug_output(VERB_STATES, "[%s] new connection %s %s", SPKRNAME, sa.c_str(), tcpstates[tp->t_state]); 
 }
 
 
@@ -2415,7 +2268,8 @@ TCPFifo::drop_until(tcp_seq_t offset)
 
 CLICK_ENDDECLS
 
-EXPORT_ELEMENT(XTRANSPORT)
+EXPORT_ELEMENT(TCPQueue)
+EXPORT_ELEMENT(TCPFifo)
+EXPORT_ELEMENT(TCPConnection)
 ELEMENT_REQUIRES(userlevel)
 ELEMENT_REQUIRES(XIAContentModule)
-ELEMENT_MT_SAFE(XTRANSPORT)

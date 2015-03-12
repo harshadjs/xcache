@@ -26,7 +26,6 @@ public:
         if (!exists(HEADER)) return NULL;
         return (void *)_map[HEADER].data();
     }
-    void set_header
     enum { XSOCK_STREAM = 1, XSOCK_DGRAM, XSOCK_RAW, XSOCK_CHUNK};
 
 };

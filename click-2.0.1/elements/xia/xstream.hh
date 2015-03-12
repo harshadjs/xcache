@@ -366,7 +366,7 @@ class TCPConnection  : public XGenericTrans {
 	friend class XTRANSPORT;
 
 public:
-	TCPConnection(XTRANSPORT *, const unsigned int port);
+	TCPConnection(XTRANSPORT *transport, const XIPFlowID &flowid);
 		~TCPConnection() {
 	    debug_output(VERB_MFD_QUEUES, 
 	    "***** DELETING TCPConnection at <%x> ***** \n",
@@ -416,8 +416,9 @@ private:
 
 	// TODO: change to XIP header processing
 	void 		_do_iphdr(WritablePacket *p);
-	void 		ip_output(WritablePacket *p); 
 
+	XIAPath src_path() { return src_path; }
+	XIAPath dst_path() { return dst_path; }
 	inline void tcp_set_state(short);
 	inline void print_tcpstats(WritablePacket *p, char *label);
 	short tcp_state() const { return tp->t_state; } 
@@ -478,7 +479,7 @@ TCPConnection::tcp_set_state(short state) {
 	    StringAccum sa;
 	    sa << *(flowid()); 
 	    tp->t_state = state; 
-		debug_output(VERB_STATES, "[%s] Flow: [%s]: State: [%s]->[%s]", speaker()->name().c_str(), sa.c_str(), tcpstates[old], tcpstates[tp->t_state]); 
+		debug_output(VERB_STATES, "[%s] Flow: [%s]: State: [%s]->[%s]", get_transport()->name().c_str(), sa.c_str(), tcpstates[old], tcpstates[tp->t_state]); 
 
 		/* Set stateless flags which will dispatch the appropriately flagged
 		 * signal packets into the mesh when we enter into one of these
@@ -491,7 +492,7 @@ TCPConnection::tcp_set_state(short state) {
 		switch (state) {
 			case TCPS_ESTABLISHED:
 				set_state(ACTIVE);
-				debug_output(VERB_STATES, "[%s] Flow: [%s]: Setting stateless SYN: [%d]", speaker()->name().c_str(), sa.c_str(), tp->t_sl_flags);
+				debug_output(VERB_STATES, "[%s] Flow: [%s]: Setting stateless SYN: [%d]", get_transport()->name().c_str(), sa.c_str(), tp->t_sl_flags);
 				break;
 	//		case TCPS_CLOSE_WAIT:
 			case TCPS_FIN_WAIT_1: 
@@ -504,27 +505,25 @@ TCPConnection::tcp_set_state(short state) {
 				} 
 				*/
 				set_state(SHUTDOWN); 
-				debug_output(VERB_STATES, "[%s] Flow: [%s]: Setting stateless FIN: [%d]", speaker()->name().c_str(), sa.c_str(), tp->t_sl_flags);
+				debug_output(VERB_STATES, "[%s] Flow: [%s]: Setting stateless FIN: [%d]", get_transport()->name().c_str(), sa.c_str(), tp->t_sl_flags);
 				break;
 			case TCPS_CLOSED:
 				set_state(CLOSE); 
 				// tp->t_sl_flags = TH_RST;
-				debug_output(VERB_STATES, "[%s] Flow: [%s]: Setting stateless RST: [%d]", speaker()->name().c_str(), sa.c_str(), tp->t_sl_flags);
+				debug_output(VERB_STATES, "[%s] Flow: [%s]: Setting stateless RST: [%d]", get_transport()->name().c_str(), sa.c_str(), tp->t_sl_flags);
 				break;
 		}
 	};
 
-	inline TCPSpeaker *
-TCPConnection::speaker() const { return dynamic_cast<TCPSpeaker*>(mfd()); } 
 
 inline int
-TCPConnection::verbosity() const { return speaker()->verbosity(); }
+TCPConnection::verbosity() const { return get_transport()->verbosity(); }
 
 inline int
-TCPQueue::verbosity() const { return _con->speaker()->verbosity(); }
+TCPQueue::verbosity() const { return _con->get_transport()->verbosity(); }
 
 inline int
-TCPFifo::verbosity() const { return _con->speaker()->verbosity(); }
+TCPFifo::verbosity() const { return _con->get_transport()->verbosity(); }
 
 	
 
