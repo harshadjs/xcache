@@ -907,7 +907,7 @@ TCPConnection::tcp_output()
     u_char		opt[MAX_TCPOPTLEN];
     long		len, win;
     click_tcp 	ti;
-    WritablePacket *p;
+    WritablePacket *p = NULL;
     WritablePacket *tcp_payload = NULL;
 
 
@@ -1087,7 +1087,7 @@ send:
 
 	/*317*/
     } else { 
-    	// empty packet??
+    	// empty packet
 		// p = Packet::make(sizeof(click_ip) + sizeof(click_tcp) + optlen);
 		/* TODO: errorhandling */
     }
@@ -1800,9 +1800,6 @@ TCPConnection::TCPConnection(XTRANSPORT *transport, const XIPFlowID &flowid)
     so_recv_buffer_size = get_transport()->globals()->so_recv_buffer_size; 
     
     _so_state = 0; 
-
-    if (OUTGOING == dir) // need to modify
-	usropen(); 
 
     /*
     if (tp->so_flags & SO_FIN_AFTER_IDLE) { 

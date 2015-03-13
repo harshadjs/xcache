@@ -1064,28 +1064,17 @@ void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	xia::X_Socket_Msg *x_socket_msg = xia_socket_msg->mutable_x_socket();
 	int sock_type = x_socket_msg->type();
 
-	//Set the source port in sock
-	sock *sk = new sock();
-	sk->port = _sport;
-	sk->timer_on = false;
-	sk->synack_waiting = false;
-	sk->dataack_waiting = false;
-	sk->num_retransmit_tries = 0;
-	sk->teardown_waiting = false;
-	sk->isAcceptSocket = false;
-	sk->num_connect_tries = 0; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
-	memset(sk->send_buffer, 0, sk->send_buffer_size * sizeof(WritablePacket*));
-	memset(sk->recv_buffer, 0, sk->recv_buffer_size * sizeof(WritablePacket*));
-	//sk->pending_connection_buf = new queue<sock>();
-	//sk->pendingAccepts = new queue<xia::XSocketMsg*>();
+	switch (socket_type) {
+		case XSOCKET_STREAM:
+		XIPFlowID flowid(NULL, NULL, _sport, 0);
+		TCPConnection tcp_conn(this, &flowid);
+		break;
+		case XSOCKET_DGRAM:
+		default:
+		//TODO
+		break;
+	}
 
-	//Set the socket_type (reliable or not) in sock
-	sk->sock_type = sock_type;
-
-	// Map the source port to sock
-	portToSock.set(_sport, sk);
-
-	portToActive.set(_sport, true);
 
 	hlim.set(_sport, HLIM_DEFAULT);
 	nxt_xport.set(_sport, CLICK_XIA_NXT_TRN);
@@ -1169,6 +1158,7 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 
 	int rc = 0, ec = 0;
 
+
 	//Bind XID
 	//click_chatter("\n\nOK: SOCKET BIND !!!\\n");
 	//get source DAG from protobuf message
@@ -1176,7 +1166,7 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 	xia::X_Bind_Msg *x_bind_msg = xia_socket_msg->mutable_x_bind();
 
 	String sdag_string(x_bind_msg->sdag().c_str(), x_bind_msg->sdag().size());
-
+	XIPFlowID flowid(NULL, NULL, _sport, 0);
 	//String sdag_string((const char*)p_in->data(),(const char*)p_in->end_data());
 //	if (DEBUG)
 //		click_chatter("\nbind requested to %s, length=%d\n", sdag_string.c_str(), (int)p_in->length());
@@ -1185,36 +1175,37 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 	//str_local_addr=str_local_addr+" "+xid_string;//Make source DAG _local_addr:SID
 
 	//Set the source DAG in sock
-	sock *sk = portToSock.get(_sport);
-	if (sk->src_path.parse(sdag_string)) {
-		sk->nxt = LAST_NODE_DEFAULT;
-		sk->last = LAST_NODE_DEFAULT;
-		sk->hlim = hlim.get(_sport);
-		sk->isConnected = false;
-		sk->initialized = true;
-		sk->sdag = sdag_string;
+	TCPConnection *tcp_conn = (TCPConnection*)conn_handlers.get(flowid);
+	if (tcp_conn->src_path().parse(sdag_string)) {
+		tcp_conn->set_nxt(LAST_NODE_DEFAULT);
+		tcp_conn->set_last(LAST_NODE_DEFAULT);
+		tcp_conn->set_hlim(hlim.get(_sport));
+
+		// tcp_conn->sdag = sdag_string;
 
 		//Check if binding to full DAG or just to SID only
-		Vector<XIAPath::handle_t> xids = sk->src_path.next_nodes( sk->src_path.source_node() );
-		XID front_xid = sk->src_path.xid( xids[0] );
+		Vector<XIAPath::handle_t> xids = tcp_conn->src_path().next_nodes( tcp_conn->src_path.source_node() );
+		XID front_xid = tcp_conn->src_path().xid( xids[0] );
 		struct click_xia_xid head_xid = front_xid.xid();
 		uint32_t head_xid_type = head_xid.type;
 		if(head_xid_type == _sid_type) {
-			sk->full_src_dag = false;
+			tcp_conn->set_full_src_dag(false);
 		} else {
-			sk->full_src_dag = true;
+			tcp_conn->set_full_src_dag(true);
 		}
 
-		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
+		XID	source_xid = tcp_conn->src_path().xid(tcp_conn->src_path.destination_node());
 		//XID xid(xid_string);
 		//TODO: Add a check to see if XID is already being used
 
 		// Map the source XID to source port (for now, for either type of tranports)
-		XIDtoPort.set(source_xid, _sport);
+		
 		addRoute(source_xid);
-//		printf("Xbind, S2P %d, %p\n", _sport, sk);
-		portToSock.set(_sport, sk);
-
+//		printf("Xbind, S2P %d, %p\n", _sport, tcp_conn);
+		// portToSock.set(_sport, tcp_conn);
+		conn_handlers.remove(flowid);
+		flowid.set_saddr(source_xid);
+		conn_handlers[flowid] = tcp_conn;
 		//click_chatter("Bound");
 		//click_chatter("set %d %d",_sport, __LINE__);
 
@@ -1222,7 +1213,7 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 		rc = -1;
 		ec = EADDRNOTAVAIL;
 	}
-
+	
 	ReturnResult(_sport, xia_socket_msg, rc, ec);
 }
 
@@ -1231,18 +1222,20 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	// Close port
 	//click_chatter("Xclose: closing %d\n", _sport);
 
-	sock *sk = portToSock.get(_sport);
+	// sock *sk = portToSock.get(_sport);
 
-	// Set timer
-	sk->timer_on = true;
-	sk->teardown_waiting = true;
-	sk->teardown_expiry = Timestamp::now() + Timestamp::make_msec(_teardown_wait_ms);
+	// // Set timer
+	// sk->timer_on = true;
+	// sk->teardown_waiting = true;
+	// sk->teardown_expiry = Timestamp::now() + Timestamp::make_msec(_teardown_wait_ms);
 
-	if (! _timer.scheduled() || _timer.expiry() >= sk->teardown_expiry )
-		_timer.reschedule_at(sk->teardown_expiry);
+	// if (! _timer.scheduled() || _timer.expiry() >= sk->teardown_expiry )
+	// 	_timer.reschedule_at(sk->teardown_expiry);
 
-	portToSock.set(_sport, sk);
+	// portToSock.set(_sport, sk);
 
+	TCPConnection *tcp_conn = conn_handlers.get(_sport);
+	tcp_conn->usrclosed();
 	xcmp_listeners.remove(_sport);
 
 	ReturnResult(_sport, xia_socket_msg);

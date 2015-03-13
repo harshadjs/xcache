@@ -436,7 +436,13 @@ private:
 	int sock_type; // 0: Reliable transport (SID), 1: Unreliable transport (SID), 2: Content Chunk transport (CID)
 	String sdag;
 	String ddag;
-
+public:
+	void set_nxt(int n){this.nxt = n;};
+	int get_nxt(){return nxt;}
+	void set_last(int l){this.last = l;};
+	void set_hlim(uint8_t h) {this.hlim = h;};
+	bool get_full_src_dag() {return full_src_dag;};
+	void st
 	/* =========================
 	 * XSP/XChunkP Socket states
 	 * ========================= */
