@@ -139,7 +139,7 @@ class GenericConnHandler {
     * even if it is overwirtten */
     GenericConnHandler (
         XTRANSPORT *transport, 
-        const XIPFlowID &flowid,
+        const unsigned short port,
         int type);  
 
     virtual void push(const int port, Packet *p) = 0 ;
@@ -157,7 +157,7 @@ protected:
     * 
     * @return The MultiFlowDispatcher */
     XTRANSPORT *get_transport() const { return transport; }
-    XIPFlowID* flowid() {return flowid;}
+    const unsigned short get_port() {return port;}
 //     // Next 3 lines formerly declared protected
 //     void set_q_membership(int qid)  { /* click_chatter("q_mem %d", q_membership); */ q_membership |= (1 << qid); } 
 //     void del_q_membership(int qid)  { q_membership &= ~(1 <<qid); }
@@ -170,14 +170,21 @@ protected:
     private: 
 
     GenericConnHandler() { };
-    XIPFlowID flowid;
+    unsigned short port;
     XTRANSPORT *transport;
     int type;   // 0: Reliable transport (SID), 1: Unreliable transport (SID), 2: Content Chunk transport (CID)
     HandlerState state;
+    XIAPath src_path;
+    XIAPath dst_path;
+    int nxt;
+    int last;
+    uint8_t hlim;
+    bool did_poll;
+    unsigned polling;
     friend class XTRANSPORT;
 };
 
-typedef HashTable<XIPFlowID, GenericConnHandler*>::iterator ConnIterator; 
+typedef HashTable<unsigned int, GenericConnHandler*>::iterator ConnIterator; 
 
 class XTRANSPORT : public Element { 
 
@@ -218,8 +225,10 @@ class XTRANSPORT : public Element {
     list<int> xcmp_listeners;   // list of ports wanting xcmp notifications
 
     /* Core data structures */
-    HashTable<XIPFlowID, GenericConnHandler*> conn_handlers;
-    ConnIterator conn_iterator;
+    HashTable<XIDpair, GenericConnHandler*> pairToHandler;  // network packet
+    HashTable<unsigned short, GenericConnHandler*> portToHandler;   // API packet
+    
+    // ConnIterator conn_iterator;
     int num_connections;
     // FIXME: can these be rolled into the sock structure?
 	HashTable<unsigned short, int> nxt_xport;

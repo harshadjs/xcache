@@ -361,7 +361,7 @@ class TCPFifo
 /* =========================
  * Socket states
  * ========================= */
-class TCPConnection  : public XGenericTrans {
+class TCPConnection  : public GenericConnHandler {
 
 	friend class XTRANSPORT;
 
@@ -424,11 +424,7 @@ private:
 	inline void print_tcpstats(WritablePacket *p, char *label);
 	short tcp_state() const { return tp->t_state; } 
 
-	XIAPath src_path;
-	XIAPath dst_path;
-	int nxt;
-	int last;
-	uint8_t hlim;
+
 
 	unsigned char sk_state;     // e.g. TCP connection state for tcp_sock
 
@@ -484,7 +480,6 @@ inline void
 TCPConnection::tcp_set_state(short state) {
 	    short old = tp->t_state; 
 	    StringAccum sa;
-	    sa << *(flowid()); 
 	    tp->t_state = state; 
 		debug_output(VERB_STATES, "[%s] Flow: [%s]: State: [%s]->[%s]", get_transport()->name().c_str(), sa.c_str(), tcpstates[old], tcpstates[tp->t_state]); 
 

@@ -1789,8 +1789,8 @@ TCPConnection::tcp_newtcpcb()
 }
 
 
-TCPConnection::TCPConnection(XTRANSPORT *transport, const XIPFlowID &flowid)
-	: GenericConnHandler(transport, flowid, XSOCKET_STREAM), _q_recv(this), _q_usr_input(this)
+TCPConnection::TCPConnection(XTRANSPORT *transport, const unsigned short port)
+	: GenericConnHandler(transport, port, XSOCKET_STREAM), _q_recv(this), _q_usr_input(this)
 {
 
     tp = tcp_newtcpcb();
