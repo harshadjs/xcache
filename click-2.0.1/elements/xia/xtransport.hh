@@ -181,6 +181,8 @@ protected:
     uint8_t hlim;
     bool did_poll;
     unsigned polling;
+    bool recv_pending; // true if we should send received network data to app upon receiving it
+    xia::XSocketMsg *pending_recv_msg;
     friend class XTRANSPORT;
 };
 

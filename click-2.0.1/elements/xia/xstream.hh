@@ -414,8 +414,6 @@ private:
 	tcpcb*		tcp_newtcpcb(); 
 	tcp_seq_t	so_recv_buffer_space(); 
 
-	// TODO: change to XIP header processing
-	void 		_do_iphdr(WritablePacket *p);
 
 	XIAPath src_path() { return src_path; }
 	XIAPath dst_path() { return dst_path; }

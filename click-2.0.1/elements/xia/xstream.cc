@@ -239,6 +239,11 @@ TCPConnection::tcp_input(WritablePacket *p)
 				// indicate the next packet we expect to get from the sender.
 				if (! _q_recv.is_empty() && has_pullable_data()) {
 					tp->rcv_nxt = _q_recv.last_nxt();
+					if (polling) {
+						// tell API we are readable
+						ProcessPollEvent(_dport, POLLIN);
+					}
+					check_for_and_handle_pending_recv();
 					debug_output(VERB_TCPSTATS, "input (fp) updating rcv_nxt to [%u]", tp->rcv_nxt);
 				}
 
@@ -294,20 +299,12 @@ TCPConnection::tcp_input(WritablePacket *p)
 			get_transport()->_tcpstat.tcps_accepts++;
 
 
-			if (is_polling()) {
-				// tell API we are writble now
-				ProcessPollEvent(tcph -> th_dport, POLLOUT);
-			}
+			// // If the app is ready for a new connection, alert it
+			// xia::XSocketMsg *acceptXSM = sk->pendingAccepts.front();
+			// ReturnResult(_dport, acceptXSM);
+			// sk->pendingAccepts.pop();
+			// delete acceptXSM;
 
-			// Notify API that the connection is established
-			xia::XSocketMsg xsm;
-			xsm.set_type(xia::XCONNECT);
-			xsm.set_sequence(0); // TODO: what should this be?
-			xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
-			XIAPath src_path = xiah.src_path();
-			connect_msg->set_ddag(src_path.unparse().c_str());
-			connect_msg->set_status(xia::X_Connect_Msg::XCONNECTED);
-			ReturnResult(tcph -> th_dport, &xsm);
 			goto trimthenstep6;
 
 			/* 530 */
@@ -338,6 +335,21 @@ TCPConnection::tcp_input(WritablePacket *p)
 
 			if (tiflags & TH_ACK && SEQ_GT(tp->snd_una, tp->iss)) {
 				tcp_set_state(TCPS_ESTABLISHED);
+				if (sk->polling) {
+					// tell API we are writble now
+					ProcessPollEvent(port, POLLOUT);
+				}
+
+				//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+
+				// Notify API that the connection is established
+				xia::XSocketMsg xsm;
+				xsm.set_type(xia::XCONNECT);
+				xsm.set_sequence(0); // TODO: what should this be?
+				xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
+				connect_msg->set_ddag(src_path.unparse().c_str());
+				connect_msg->set_status(xia::X_Connect_Msg::XCONNECTED);
+				ReturnResult(port, &xsm);
 
 				/* Apply Window Scaling Options if set in incoming header */
 				if ((tp->t_flags & (TF_RCVD_SCALE | TF_REQ_SCALE)) == 
@@ -723,6 +735,11 @@ TCPConnection::tcp_input(WritablePacket *p)
 				
 				if (! _q_recv.is_empty() && has_pullable_data()) {
 					tp->rcv_nxt = _q_recv.last_nxt();
+					if (polling) {
+						// tell API we are readable
+						ProcessPollEvent(_dport, POLLIN);
+					}
+					check_for_and_handle_pending_recv();
 					debug_output(VERB_TCPSTATS, "input (closing) updating rcv_nxt to [%u]", tp->rcv_nxt);
 				}
 				
@@ -807,6 +824,11 @@ dodata:
 		
 		if (! _q_recv.is_empty() && has_pullable_data()) {
 			tp->rcv_nxt = _q_recv.last_nxt();
+			if (polling) {
+				// tell API we are readable
+				ProcessPollEvent(_dport, POLLIN);
+			}
+			check_for_and_handle_pending_recv();
 			debug_output(VERB_TCPSTATS, "input (sp) updating rcv_nxt to [%u]", tp->rcv_nxt);
 		}
 
@@ -1091,9 +1113,6 @@ send:
 		// p = Packet::make(sizeof(click_ip) + sizeof(click_tcp) + optlen);
 		/* TODO: errorhandling */
     }
-	
-    ti.th_sport = flowid()->sport(); 
-    ti.th_dport = flowid()->dport(); 
 
     /*339*/
     if (flags & TH_FIN && tp->t_flags & TF_SENTFIN && 
@@ -1224,8 +1243,7 @@ TCPConnection::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 	}
 	
 /*	setports(th->th_sport, _con_id._ports); */
-	th.th_dport = flowid()->dport(); 
-	th.th_sport = flowid()->sport(); 
+
 	th.th_flags2 = 0; 
 	th.th_seq =   htonl(seq); 
 	th.th_ack =   htonl(ack); 
@@ -1316,8 +1334,22 @@ TCPConnection::tcp_timers (int timer) {
 		  tp->t_force = 0; 
 		  break; 
 		case TCPT_KEEP: 
-		  if ( tp->t_state < TCPS_ESTABLISHED) 
+		  if ( tp->t_state < TCPS_ESTABLISHED) {
+			// Notify API that the connection failed
+			xia::XSocketMsg xsm;
+			xsm.set_type(xia::XCONNECT);
+			xsm.set_sequence(0); // TODO: what should This be?
+			xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
+			connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
+			ReturnResult(port, &xsm);
+
+			if (sk->polling) {
+				printf("checking poll event for %d from timer\n", port);
+				ProcessPollEvent(port, POLLHUP);
+			}
+
 		    goto dropit; 
+		  }
 		  if ( tp->so_flags & SO_KEEPALIVE && 
 		       tp->t_state <= TCPS_CLOSE_WAIT) { 
 		    if (tp->t_idle >= get_transport()->globals()->tcp_keepidle + 
@@ -1372,8 +1404,50 @@ dropit:
 		  	usrclosed(); 
 		  break; 
 	}
+	process_CID_request();
 }
 
+void
+TCPConnection::process_CID_request() { 
+
+	// find the (next) earlist expiry
+	if (sk->timer_on == true && sk->expiry > now && ( sk->expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
+		earlist_pending_expiry = sk->expiry;
+	}
+	if (sk->timer_on == true && sk->teardown_expiry > now && ( sk->teardown_expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
+		earlist_pending_expiry = sk->teardown_expiry;
+	}
+
+
+	// check for CID request cases
+	for (HashTable<XID, bool>::iterator it = sk->XIDtoTimerOn.begin(); it != sk->XIDtoTimerOn.end(); ++it ) {
+		XID requested_cid = it->first;
+		bool timer_on = it->second;
+
+		HashTable<XID, Timestamp>::iterator it2;
+		it2 = sk->XIDtoExpiryTime.find(requested_cid);
+		Timestamp cid_req_expiry = it2->second;
+
+		if (timer_on == true && cid_req_expiry <= now) {
+			//printf("CID-REQ RETRANSMIT! \n");
+			//retransmit cid-request
+			HashTable<XID, WritablePacket*>::iterator it3;
+			it3 = sk->XIDtoCIDreqPkt.find(requested_cid);
+			copy = copy_cid_req_packet(it3->second, sk);
+			XIAHeader xiah(copy);
+			//printf("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (char *)xiah.payload(), xiah.plen());
+			output(NETWORK_PORT).push(copy);
+
+			cid_req_expiry  = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+			sk->XIDtoExpiryTime.set(requested_cid, cid_req_expiry);
+			sk->XIDtoTimerOn.set(requested_cid, true);
+		}
+
+		if (timer_on == true && cid_req_expiry > now && ( cid_req_expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
+			earlist_pending_expiry = cid_req_expiry;
+		}
+	}
+}
 
 void
 TCPConnection::tcp_canceltimers() { 
@@ -1753,6 +1827,65 @@ TCPConnection::print_state(StringAccum &sa)
 	sa << "\n"; 
 } 
 
+/**
+* @brief check to see if the app is waiting for this data; if so, return it now
+*
+* @param tcp_conn
+*/
+void TCPConnection::check_for_and_handle_pending_recv() {
+	if (recv_pending) {
+		int bytes_returned = read_from_recv_buf(tcp_conn->pending_recv_msg);
+		ReturnResult(tcp_conn->port, tcp_conn->pending_recv_msg, bytes_returned);
+
+		recv_pending = false;
+		delete pending_recv_msg;
+		pending_recv_msg = NULL;
+	}
+}
+
+/**
+* @brief Read received data from buffer.
+*
+* We'll use this same xia_socket_msg as the response to the API:
+* 1) We fill in the data (from *only one* packet for DGRAM)
+* 2) We fill in how many bytes we're returning
+* 3) We fill in the sender's DAG (DGRAM only)
+* 4) We clear out any buffered packets whose data we return to the app
+*
+* @param xia_socket_msg The Xrecv or Xrecvfrom message from the API
+* @param tcp_conn The TCPConnection struct for this connection
+*
+* @return  The number of bytes read from the buffer.
+*/
+int TCPConnection::read_from_recv_buf(xia::XSocketMsg *xia_socket_msg) {
+
+//		printf("<<< read_from_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", tcp_conn->port, tcp_conn->recv_base, tcp_conn->next_recv_seqnum, tcp_conn->recv_buffer_size);
+	xia::X_Recv_Msg *x_recv_msg = xia_socket_msg->mutable_x_recv();
+	int bytes_requested = x_recv_msg->bytes_requested();
+	int bytes_returned = 0;
+	char buf[1024*1024]; // TODO: pick a buf size
+	memset(buf, 0, 1024*1024);
+	while (!_q_recv.is_empty()) {
+
+		if (bytes_returned >= bytes_requested) break;
+
+		WritablePacket *p = _q_recv.pull_front();
+
+		size_t data_size = p -> length();
+
+		memcpy((void*)(&buf[bytes_returned]), (const void*)p -> data(), data_size);
+		bytes_returned += data_size;
+
+		p->kill();
+
+//			printf("    port %u grabbing index %d, seqnum %d\n", tcp_conn->port, i%tcp_conn->recv_buffer_size, i);
+	}
+	x_recv_msg->set_payload(buf, bytes_returned); // TODO: check this: need to turn buf into String first?
+	x_recv_msg->set_bytes_returned(bytes_returned);
+
+//		printf(">>> read_from_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", tcp_conn->port, tcp_conn->recv_base, tcp_conn->next_recv_seqnum, tcp_conn->recv_buffer_size);
+	return bytes_returned;
+}
 
 tcpcb *
 TCPConnection::tcp_newtcpcb() 
