@@ -7,6 +7,7 @@
 #include <click/packet.hh>
 #include <click/vector.hh>
 
+#include "xtransport.hh"
 #include "xstream.h"
 #include <click/xiatransportheader.hh>
 
@@ -849,7 +850,7 @@ dodata:
 			tcp_set_state(TCPS_TIME_WAIT); 
 			tcp_canceltimers(); 
 			tp->t_timer[TCPT_2MSL] = 2 * TCPTV_MSL;
-
+			// the socket is really disconnected
 			break;
 		case TCPS_TIME_WAIT:
 			debug_output(VERB_TCP, "%u: TIME_WAIT", get_transport()->tcp_now());
@@ -1309,6 +1310,7 @@ XStream::tcp_timers (int timer) {
 		    tp->t_timer[TCPT_2MSL] = get_transport()->globals()->tcp_keepintvl; 
 		  else
 		    tcp_set_state(TCPS_CLOSED); 
+			// the socket is really closed
 		  break; 
 		case TCPT_PERSIST:
 		  tcp_setpersist(); 

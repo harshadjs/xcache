@@ -24,7 +24,7 @@ public:
     // need to type check, but first ignore here
     void* header() {
         if (!exists(HEADER)) return NULL;
-        return (void *)_map[HEADER].data();
+        return (void *)(_map[HEADER].data());
     }
     enum { XSOCK_STREAM = 1, XSOCK_DGRAM, XSOCK_RAW, XSOCK_CHUNK};
 
