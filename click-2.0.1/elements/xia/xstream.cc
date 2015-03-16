@@ -7,29 +7,10 @@
 #include <click/packet.hh>
 #include <click/vector.hh>
 
-#include <click/xiacontentheader.hh>
 #include "xstream.h"
 #include <click/xiatransportheader.hh>
 
-/*
-** FIXME:
-** - implement a backoff delay on retransmits so we don't flood the connection
-** - fix cid header size issue so we work correctly with the linux version
-** - migrate from uisng printf and click_chatter to using the click ErrorHandler class
-** - there are still some small memory leaks happening when stream sockets are created/used/closed
-**   (problem does not happen if sockets are just opened and closed)
-** - fix issue in SYN code with XIDPairToConnectPending (see comment in code for details)
-*/
-
-
-CLICK_DECLS
-
-
-
-
-#define CONNECTION_CLOSED 	0x01
-#define CONNECTION_HAS_DATA	0x02
-
+#define UNUSED(x) ((void)(x))
 #define min(a,b) (((a)<(b))?(a):(b))
 #define max(a,b) (((a)>(b))?(a):(b))
 
@@ -48,22 +29,20 @@ CLICK_DECLS
 
 CLICK_DECLS
 
-
 void
-TCPConnection::push(Packet *_p) {
-
+XStream::push(int port, Packet *_p) {
+	UNUSED(port);
 	WritablePacket *p = _p->uniqueify(); 
 	tcp_input(p);
 }
 
 
-
 inline void 
-TCPConnection::print_tcpstats(WritablePacket *p, char* label)
+XStream::print_tcpstats(WritablePacket *p, char* label)
 {
-    const click_tcp *tcph= p->tcp_header();
-    const click_ip 	*iph = p->ip_header();
-	int len = ntohs(iph->ip_len) - sizeof(click_ip) - (tcph->th_off << 2); 
+ //    const click_tcp *tcph= p->tcp_header();
+ //    const click_ip 	*iph = p->ip_header();
+	// int len = ntohs(iph->ip_len) - sizeof(click_ip) - (tcph->th_off << 2); 
 
 	debug_output(VERB_TCPSTATS, "[%s] [%s] S/A: [%u/%u] len: [%u] 59: [%u] 60: [%u] 62: [%u] 63: [%u] 64: [%u] 65: [%u] 67: [%u] 68: [%u] 80:[%u] 81:[%u] fifo: [%u] q1st/len: [%u/%u] qlast: [%u] qbtok: [%u] qisord: [%u]", SPKRNAME, label, ntohl(tcph->th_seq), ntohl(tcph->th_ack), len, tp->snd_una, tp->snd_nxt, tp->snd_wl1, tp->snd_wl2, tp->iss, tp->snd_wnd, tp->rcv_wnd, tp->rcv_nxt, tp->snd_cwnd, tp->snd_ssthresh, _q_usr_input.byte_length(), _q_recv.first(), _q_recv.first_len(), _q_recv.last(), _q_recv.bytes_ok(), _q_recv.is_ordered());
 
@@ -72,7 +51,7 @@ TCPConnection::print_tcpstats(WritablePacket *p, char* label)
 
 // Stateful TCP segment input (recvd packet) handling
 void 
-TCPConnection::tcp_input(WritablePacket *p)
+XStream::tcp_input(WritablePacket *p)
 {
     unsigned 	tiwin, tiflags; 
     u_long		ts_val, ts_ecr;
@@ -87,7 +66,11 @@ TCPConnection::tcp_input(WritablePacket *p)
     XIAHeader xiah(p->xia_header());
     TransportHeader thdr(p);
 
-    const click_tcp *tcph= p->tcp_header();
+    click_tcp *tcph= (click_tcp *)p->header();
+    if (tcph -> NULL)
+    {
+    	click_chatter("Invalid header\n");
+    }
 
     get_transport()->_tcpstat.tcps_rcvtotal++; 
 
@@ -241,7 +224,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 					tp->rcv_nxt = _q_recv.last_nxt();
 					if (polling) {
 						// tell API we are readable
-						ProcessPollEvent(_dport, POLLIN);
+						ProcessPollEvent(port, POLLIN);
 					}
 					check_for_and_handle_pending_recv();
 					debug_output(VERB_TCPSTATS, "input (fp) updating rcv_nxt to [%u]", tp->rcv_nxt);
@@ -300,7 +283,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 
 
 			// // If the app is ready for a new connection, alert it
-			// xia::XSocketMsg *acceptXSM = sk->pendingAccepts.front();
+			// XSocketMsg *acceptXSM = sk->pendingAccepts.front();
 			// ReturnResult(_dport, acceptXSM);
 			// sk->pendingAccepts.pop();
 			// delete acceptXSM;
@@ -335,7 +318,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 
 			if (tiflags & TH_ACK && SEQ_GT(tp->snd_una, tp->iss)) {
 				tcp_set_state(TCPS_ESTABLISHED);
-				if (sk->polling) {
+				if (polling) {
 					// tell API we are writble now
 					ProcessPollEvent(port, POLLOUT);
 				}
@@ -343,12 +326,12 @@ TCPConnection::tcp_input(WritablePacket *p)
 				//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
 
 				// Notify API that the connection is established
-				xia::XSocketMsg xsm;
-				xsm.set_type(xia::XCONNECT);
+				XSocketMsg xsm;
+				xsm.set_type(XCONNECT);
 				xsm.set_sequence(0); // TODO: what should this be?
 				xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
 				connect_msg->set_ddag(src_path.unparse().c_str());
-				connect_msg->set_status(xia::X_Connect_Msg::XCONNECTED);
+				connect_msg->set_status(X_Connect_Msg::XCONNECTED);
 				ReturnResult(port, &xsm);
 
 				/* Apply Window Scaling Options if set in incoming header */
@@ -737,7 +720,7 @@ TCPConnection::tcp_input(WritablePacket *p)
 					tp->rcv_nxt = _q_recv.last_nxt();
 					if (polling) {
 						// tell API we are readable
-						ProcessPollEvent(_dport, POLLIN);
+						ProcessPollEvent(port, POLLIN);
 					}
 					check_for_and_handle_pending_recv();
 					debug_output(VERB_TCPSTATS, "input (closing) updating rcv_nxt to [%u]", tp->rcv_nxt);
@@ -826,7 +809,7 @@ dodata:
 			tp->rcv_nxt = _q_recv.last_nxt();
 			if (polling) {
 				// tell API we are readable
-				ProcessPollEvent(_dport, POLLIN);
+				ProcessPollEvent(port, POLLIN);
 			}
 			check_for_and_handle_pending_recv();
 			debug_output(VERB_TCPSTATS, "input (sp) updating rcv_nxt to [%u]", tp->rcv_nxt);
@@ -921,7 +904,7 @@ drop:
  * client.
  */
 void 
-TCPConnection::tcp_output() 
+XStream::tcp_output() 
 {
 
     int 		idle, sendalot, off, flags;
@@ -1196,9 +1179,9 @@ send:
 	XIAHeaderEncap xiah;
 	xiah.set_nxt(CLICK_XIA_NXT_TRN);
 	xiah.set_last(LAST_NODE_DEFAULT);
-	// xiah.set_hlim(hlim.get(_sport));
-	xiah.set_dst_path(dst_path());
-	xiah.set_src_path(src_path());
+	xiah.set_hlim(hlim.get(port));
+	xiah.set_dst_path(dst_path);
+	xiah.set_src_path(src_path);
 
 	TransportHeaderEncap *send_hdr = TransportHeaderEncap::MakeTCPHeader(&ti);
 	tcp_payload = send_hdr->encap(p);
@@ -1228,7 +1211,7 @@ send:
 }
 
 void
-TCPConnection::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
+XStream::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 {
 	click_tcp th;
 
@@ -1257,7 +1240,7 @@ TCPConnection::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 	XIAHeaderEncap xiah_new;
 	xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
 	xiah_new.set_last(LAST_NODE_DEFAULT);
-	xiah_new.set_hlim(HLIM_DEFAULT);
+	xiah_new.set_hlim(hlim.get(port));
 	xiah_new.set_dst_path(dst_path());
 	xiah_new.set_src_path(src_path());
 	TransportHeaderEncap *tcph = TransportHeaderEncap::MakeTCPHeader(&th);
@@ -1270,13 +1253,13 @@ TCPConnection::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 }
 
 tcp_seq_t
-TCPConnection::so_recv_buffer_space() { 
+XStream::so_recv_buffer_space() { 
 	return so_recv_buffer_size - _q_recv.bytes_ok(); 
 } 
 
 
 void 
-TCPConnection::fasttimo() { 
+XStream::fasttimo() { 
 	if ( tp->t_flags & TF_DELACK) { 
 		tp->t_flags &= ~TF_DELACK; 
 		tp->t_flags |= TF_ACKNOW; 
@@ -1285,7 +1268,7 @@ TCPConnection::fasttimo() {
 }
 
 void 
-TCPConnection::slowtimo() { 
+XStream::slowtimo() { 
 	int i; 
 	debug_output(VERB_TIMERS, "[%s] now: [%u] Timers: %s %d %s %d %s %d %s %d %s %d", 
 	SPKRNAME,
@@ -1297,7 +1280,7 @@ TCPConnection::slowtimo() {
 	tcptimers[4], tp->t_timer[4] );  
 
 	for ( i = 0; i < TCPT_NTIMERS; i++ ) { 
-	  // debug_output(VERB_TCP, "%u: TCPConnection::slowtimo: %s %d\n", get_transport()->tcp_now(), tcptimers[i], tp->t_timer[i]); 
+	  // debug_output(VERB_TCP, "%u: XStream::slowtimo: %s %d\n", get_transport()->tcp_now(), tcptimers[i], tp->t_timer[i]); 
 		if ( tp->t_timer[i] && --(tp->t_timer[i]) == 0) { 
 		  // StringAccum sa;
 		  // sa << *(flowid()); 
@@ -1315,7 +1298,7 @@ int	tcp_backoff[TCP_MAXRXTSHIFT + 1] =
     { 1, 2, 4, 8, 16, 32, 64, 64, 64, 64, 64, 64, 64 };
 
 void
-TCPConnection::tcp_timers (int timer) { 
+XStream::tcp_timers (int timer) { 
 	int rexmt;
 
 	switch (timer) {
@@ -1336,14 +1319,14 @@ TCPConnection::tcp_timers (int timer) {
 		case TCPT_KEEP: 
 		  if ( tp->t_state < TCPS_ESTABLISHED) {
 			// Notify API that the connection failed
-			xia::XSocketMsg xsm;
+			XSocketMsg xsm;
 			xsm.set_type(xia::XCONNECT);
 			xsm.set_sequence(0); // TODO: what should This be?
 			xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
 			connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
 			ReturnResult(port, &xsm);
 
-			if (sk->polling) {
+			if (polling) {
 				printf("checking poll event for %d from timer\n", port);
 				ProcessPollEvent(port, POLLHUP);
 			}
@@ -1404,60 +1387,17 @@ dropit:
 		  	usrclosed(); 
 		  break; 
 	}
-	process_CID_request();
 }
 
 void
-TCPConnection::process_CID_request() { 
-
-	// find the (next) earlist expiry
-	if (sk->timer_on == true && sk->expiry > now && ( sk->expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
-		earlist_pending_expiry = sk->expiry;
-	}
-	if (sk->timer_on == true && sk->teardown_expiry > now && ( sk->teardown_expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
-		earlist_pending_expiry = sk->teardown_expiry;
-	}
-
-
-	// check for CID request cases
-	for (HashTable<XID, bool>::iterator it = sk->XIDtoTimerOn.begin(); it != sk->XIDtoTimerOn.end(); ++it ) {
-		XID requested_cid = it->first;
-		bool timer_on = it->second;
-
-		HashTable<XID, Timestamp>::iterator it2;
-		it2 = sk->XIDtoExpiryTime.find(requested_cid);
-		Timestamp cid_req_expiry = it2->second;
-
-		if (timer_on == true && cid_req_expiry <= now) {
-			//printf("CID-REQ RETRANSMIT! \n");
-			//retransmit cid-request
-			HashTable<XID, WritablePacket*>::iterator it3;
-			it3 = sk->XIDtoCIDreqPkt.find(requested_cid);
-			copy = copy_cid_req_packet(it3->second, sk);
-			XIAHeader xiah(copy);
-			//printf("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (char *)xiah.payload(), xiah.plen());
-			output(NETWORK_PORT).push(copy);
-
-			cid_req_expiry  = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
-			sk->XIDtoExpiryTime.set(requested_cid, cid_req_expiry);
-			sk->XIDtoTimerOn.set(requested_cid, true);
-		}
-
-		if (timer_on == true && cid_req_expiry > now && ( cid_req_expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
-			earlist_pending_expiry = cid_req_expiry;
-		}
-	}
-}
-
-void
-TCPConnection::tcp_canceltimers() { 
+XStream::tcp_canceltimers() { 
 	int i; 
 	for (i=0; i<TCPT_NTIMERS; i++) 
 	    tp->t_timer[i] = 0;
 }
 
 void
-TCPConnection::tcp_setpersist() { 
+XStream::tcp_setpersist() { 
 	int t; 
 
 	t = ((tp->t_srtt >> 2) + tp->t_rttvar) >> 1; 
@@ -1473,7 +1413,7 @@ TCPConnection::tcp_setpersist() {
 	
 }
 void 
-TCPConnection::tcp_xmit_timer(short rtt) { 
+XStream::tcp_xmit_timer(short rtt) { 
 	short delta; 
 	get_transport()->_tcpstat.tcps_rttupdated++; 
 	
@@ -1542,7 +1482,7 @@ TCPConnection::tcp_xmit_timer(short rtt) {
 }
 
 void
-TCPConnection::tcp_drop(int err)
+XStream::tcp_drop(int err)
 {
 	tp->so_error = err; 
 	tcp_set_state(TCPS_CLOSED); 
@@ -1552,7 +1492,7 @@ TCPConnection::tcp_drop(int err)
 }
 
 u_int
-TCPConnection::tcp_mss(u_int offer) { 
+XStream::tcp_mss(u_int offer) { 
 	unsigned glbmaxseg = get_transport()->_tcp_globals.tcp_mssdflt;
 	/* FIXME sensible mss function */ 
 	u_int mss ;
@@ -1574,7 +1514,7 @@ TCPConnection::tcp_mss(u_int offer) {
  * appropriate action.
  */
 int 
-TCPConnection::usrsend(WritablePacket *p)
+XStream::usrsend(WritablePacket *p)
 { 
 	// Sanity Check: We should never recieve a packet after our tcp state is
 	// beyond CLOSE_WAIT.
@@ -1617,7 +1557,7 @@ TCPConnection::usrsend(WritablePacket *p)
 
 /* user request 424*/
 void 
-TCPConnection::usrclosed() 
+XStream::usrclosed() 
 { 
     switch (tp->t_state) { 
 		case TCPS_CLOSED:
@@ -1638,7 +1578,7 @@ TCPConnection::usrclosed()
 
 
 void 
-TCPConnection::usropen() 
+XStream::usropen() 
 { 
 	if (tp->iss == 0) {
 		tp->iss = 0x11111111; 
@@ -1655,7 +1595,7 @@ TCPConnection::usropen()
 
 /* 
 inline void 
-TCPConnection::initialize(const int port)
+XStream::initialize(const int port)
 { 
     dispatcher()->debug_output(VERB_STATES,"[%s] initialize for port <%d>\n", 
     	dispatcher()->name().c_str(), port); 
@@ -1664,14 +1604,12 @@ TCPConnection::initialize(const int port)
 } */
 
 
-HandlerState
-TCPConnection::set_state(const HandlerState new_state, const int input) { 
+void
+XStream::set_state(const HandlerState new_state) { 
 	
 	HandlerState old_state = get_state(); 
-	if ( old_state == new_state) 
-	    return old_state; 
 
-	GenericConnHandler::set_state(new_state); 
+	XGenericTransport::set_state(new_state); 
 	
 
 	if ((old_state == CREATE) && new_state == (INITIALIZE))
@@ -1684,13 +1622,11 @@ TCPConnection::set_state(const HandlerState new_state, const int input) {
 	    tcp_set_state(TCPS_CLOSED); 
 	    /* tcp_output(); */
 	} 
-
-	return get_state(); 
 } 
 
 // NOT SURE WE NEED THIS
 // void 
-// TCPConnection::_tcp_dooptions(u_char *cp, int cnt, const TransportHeader * ti, 
+// XStream::_tcp_dooptions(u_char *cp, int cnt, const TransportHeader * ti, 
 // 	int * ts_present, u_long *ts_val, u_long *ts_ecr) 
 // { 
 // 	uint16_t mss;
@@ -1809,7 +1745,7 @@ TCPConnection::set_state(const HandlerState new_state, const int input) {
 
 
 void
-TCPConnection::print_state(StringAccum &sa) 
+XStream::print_state(StringAccum &sa) 
 { 
 	int i;
 	sa << tcpstates[tp->t_state] << "\n"; 
@@ -1832,11 +1768,10 @@ TCPConnection::print_state(StringAccum &sa)
 *
 * @param tcp_conn
 */
-void TCPConnection::check_for_and_handle_pending_recv() {
+void XStream::check_for_and_handle_pending_recv() {
 	if (recv_pending) {
 		int bytes_returned = read_from_recv_buf(tcp_conn->pending_recv_msg);
-		ReturnResult(tcp_conn->port, tcp_conn->pending_recv_msg, bytes_returned);
-
+		ReturnResult(port, pending_recv_msg, bytes_returned);
 		recv_pending = false;
 		delete pending_recv_msg;
 		pending_recv_msg = NULL;
@@ -1853,11 +1788,11 @@ void TCPConnection::check_for_and_handle_pending_recv() {
 * 4) We clear out any buffered packets whose data we return to the app
 *
 * @param xia_socket_msg The Xrecv or Xrecvfrom message from the API
-* @param tcp_conn The TCPConnection struct for this connection
+* @param tcp_conn The XStream struct for this connection
 *
 * @return  The number of bytes read from the buffer.
 */
-int TCPConnection::read_from_recv_buf(xia::XSocketMsg *xia_socket_msg) {
+int XStream::read_from_recv_buf(XSocketMsg *xia_socket_msg) {
 
 //		printf("<<< read_from_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", tcp_conn->port, tcp_conn->recv_base, tcp_conn->next_recv_seqnum, tcp_conn->recv_buffer_size);
 	xia::X_Recv_Msg *x_recv_msg = xia_socket_msg->mutable_x_recv();
@@ -1888,7 +1823,7 @@ int TCPConnection::read_from_recv_buf(xia::XSocketMsg *xia_socket_msg) {
 }
 
 tcpcb *
-TCPConnection::tcp_newtcpcb() 
+XStream::tcp_newtcpcb() 
 { 
 	tcpcb *tp = new tcpcb();
 	if (tp == NULL)
@@ -1922,13 +1857,12 @@ TCPConnection::tcp_newtcpcb()
 }
 
 
-TCPConnection::TCPConnection(XTRANSPORT *transport, const unsigned short port)
-	: GenericConnHandler(transport, port, XSOCKET_STREAM), _q_recv(this), _q_usr_input(this)
+XStream::XStream(XTRANSPORT *transport, const unsigned short port)
+	: XGenericTransport(transport, port, XSOCKET_STREAM), _q_recv(this), _q_usr_input(this)
 {
 
     tp = tcp_newtcpcb();
     tp->t_state = TCPS_CLOSED;
-    _errh = get_transport()->error_handler();
 
     so_recv_buffer_size = get_transport()->globals()->so_recv_buffer_size; 
     
@@ -1966,7 +1900,7 @@ TCPConnection::TCPConnection(XTRANSPORT *transport, const unsigned short port)
  *  queues doesn't help, since we need to be able to queue packets in random
  *  order.
  */ 
-TCPQueue::TCPQueue(TCPConnection *con)
+TCPQueue::TCPQueue(XStream *con)
 { 
 	_con = con ;
 	_q_first = _q_last = _q_tail = NULL; 
@@ -2278,7 +2212,7 @@ TCPQueue::pretty_print(StringAccum &sa, int signed_width)
 }
 
 
-TCPFifo::TCPFifo(TCPConnection *con)
+TCPFifo::TCPFifo(XStream *con)
 { 
 	_con = con;
 	_q = (WritablePacket**) CLICK_LALLOC(sizeof(WritablePacket *) * FIFO_SIZE); 
@@ -2408,6 +2342,6 @@ CLICK_ENDDECLS
 
 EXPORT_ELEMENT(TCPQueue)
 EXPORT_ELEMENT(TCPFifo)
-EXPORT_ELEMENT(TCPConnection)
+EXPORT_ELEMENT(XStream)
 ELEMENT_REQUIRES(userlevel)
 ELEMENT_REQUIRES(XIAContentModule)
