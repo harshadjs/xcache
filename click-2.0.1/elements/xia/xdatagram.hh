@@ -82,6 +82,10 @@ public:
 	};
 private:
 
+
+	bool should_buffer_received_packet(WritablePacket *p);
+	void add_packet_to_recv_buf(WritablePacket *p);
+	void check_for_and_handle_pending_recv();
 	// receive buffer
 	WritablePacket *recv_buffer[MAX_RECV_WIN_SIZE]; // packets we've received but haven't delivered to the app // TODO: start smaller, dynamically resize if app asks for more space (up to MAX)?
 	uint32_t recv_buffer_size; // the number of PACKETS we can buffer (received but not delivered to app)

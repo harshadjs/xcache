@@ -12,11 +12,17 @@
 #include <clicknet/xia.h>
 #include "xiacontentmodule.hh"
 #include "xiaxidroutetable.hh"
-#include <clicknet/udp.h>
 #include <click/string.hh>
 #include <elements/ipsec/sha1_impl.hh>
 #include <click/xiatransportheader.hh>
+#include <clicknet/tcp.h>
 
+#define TCPOUTFLAGS
+#define TCPSTATES
+#include "clicknet/tcp_fsm.h"
+// #define TCPTIMERS
+#include "clicknet/tcp_timer.h"
+#include "clicknet/tcp_var.h"
 
 #if CLICK_USERLEVEL
 #include <list>

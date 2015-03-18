@@ -8,8 +8,12 @@
 #include <click/vector.hh>
 
 #include "xtransport.hh"
-#include "xstream.h"
+#include "xstream.hh"
 #include <click/xiatransportheader.hh>
+
+#define TCPTIMERS
+#define TCPOUTFLAGS
+#define TCPSTATES
 
 #define UNUSED(x) ((void)(x))
 #define min(a,b) (((a)<(b))?(a):(b))

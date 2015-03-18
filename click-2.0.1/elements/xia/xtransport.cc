@@ -371,9 +371,27 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 	}
 
 	XGenericTransport *handler = pairToHandler.get(xid_pair);
-	if (handler == NULL && thdr.type() == TransportHeader::XSOCK_DGRAM)
+	if (handler != NULL)
 	{
-		p_in -> kill();
+		handler -> push(p_in);
+	}
+	else if (handler == NULL && thdr.type() == TransportHeader::XSOCK_DGRAM)
+	{
+		XIDpair xid_half_pair;
+		xid_half_pair.set_src(_destination_xid);
+		udp_handler = pairToHandler.get(xid_pair);
+		if (udp_handler != NULL)
+		{
+			udp_handler = dynamic_cast<XDatagram *>(udp_handler);
+			udp_handler -> set_src_path(dst_path);
+			udp_handler -> set_dst_path(src_path);
+			udp_handler -> set_key(xid_pair);
+			pairToHandler.set(xid_pair, udp_handler);
+			portToHandler.set(udp_handler -> get_port(), udp_handler);
+			udp_handler -> push(p_in)
+		} else {
+			p_in -> kill();
+		}
 		return;
 	} else if (handler == NULL && thdr.type() == TransportHeader::XSOCK_STREAM) {
 		TransportHeader thdr(p_in);
@@ -414,6 +432,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in)
 			delete reset;
 			output(NETWORK_PORT).push(p);
 		}
+	} else {
+		p_in -> kill();
 	}
 	
 }
