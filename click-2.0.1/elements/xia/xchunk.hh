@@ -1,5 +1,5 @@
-#ifndef CLICK_XTRANSPORT_HH
-#define CLICK_XTRANSPORT_HH
+#ifndef CLICK_XCHUNK_HH
+#define CLICK_XCHUNK_HH
 
 #include <click/element.hh>
 #include <clicknet/xia.h>
@@ -16,6 +16,7 @@
 #include <click/string.hh>
 #include <elements/ipsec/sha1_impl.hh>
 #include <click/xiatransportheader.hh>
+#include "xtransport.hh"
 
 
 #if CLICK_USERLEVEL

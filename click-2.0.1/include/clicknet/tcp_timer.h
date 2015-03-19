@@ -37,6 +37,7 @@
  * Definitions of the TCP timers.  These timers are counted
  * down PR_SLOWHZ times a second.
  */
+#define PR_SLOWHZ       10 
 #define	TCPT_NTIMERS	4
 
 #define	TCPT_REXMT	0		/* retransmit */

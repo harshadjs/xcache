@@ -7,8 +7,9 @@
 #include <click/packet.hh>
 #include <click/vector.hh>
 
-#include "xtransport.hh"
+
 #include "xstream.hh"
+#include "xtransport.hh"
 #include <click/xiatransportheader.hh>
 
 #define TCPTIMERS
@@ -35,8 +36,7 @@
 CLICK_DECLS
 
 void
-XStream::push(int port, Packet *_p) {
-	UNUSED(port);
+XStream::push(Packet *_p) {
 	WritablePacket *p = _p->uniqueify(); 
 	tcp_input(p);
 }
@@ -49,7 +49,7 @@ XStream::print_tcpstats(WritablePacket *p, char* label)
  //    const click_ip 	*iph = p->ip_header();
 	// int len = ntohs(iph->ip_len) - sizeof(click_ip) - (tcph->th_off << 2); 
 
-	debug_output(VERB_TCPSTATS, "[%s] [%s] S/A: [%u/%u] len: [%u] 59: [%u] 60: [%u] 62: [%u] 63: [%u] 64: [%u] 65: [%u] 67: [%u] 68: [%u] 80:[%u] 81:[%u] fifo: [%u] q1st/len: [%u/%u] qlast: [%u] qbtok: [%u] qisord: [%u]", SPKRNAME, label, ntohl(tcph->th_seq), ntohl(tcph->th_ack), len, tp->snd_una, tp->snd_nxt, tp->snd_wl1, tp->snd_wl2, tp->iss, tp->snd_wnd, tp->rcv_wnd, tp->rcv_nxt, tp->snd_cwnd, tp->snd_ssthresh, _q_usr_input.byte_length(), _q_recv.first(), _q_recv.first_len(), _q_recv.last(), _q_recv.bytes_ok(), _q_recv.is_ordered());
+	//debug_output(VERB_TCPSTATS, "[%s] [%s] S/A: [%u/%u] len: [%u] 59: [%u] 60: [%u] 62: [%u] 63: [%u] 64: [%u] 65: [%u] 67: [%u] 68: [%u] 80:[%u] 81:[%u] fifo: [%u] q1st/len: [%u/%u] qlast: [%u] qbtok: [%u] qisord: [%u]", SPKRNAME, label, ntohl(tcph->th_seq), ntohl(tcph->th_ack), len, tp->snd_una, tp->snd_nxt, tp->snd_wl1, tp->snd_wl2, tp->iss, tp->snd_wnd, tp->rcv_wnd, tp->rcv_nxt, tp->snd_cwnd, tp->snd_ssthresh, _q_usr_input.byte_length(), _q_recv.first(), _q_recv.first_len(), _q_recv.last(), _q_recv.bytes_ok(), _q_recv.is_ordered());
 
 }
 
@@ -71,8 +71,8 @@ XStream::tcp_input(WritablePacket *p)
     XIAHeader xiah(p->xia_header());
     TransportHeader thdr(p);
 
-    click_tcp *tcph= (click_tcp *)p->header();
-    if (tcph -> NULL)
+    click_tcp *tcph= (click_tcp *)thdr->header();
+    if (tcph == NULL)
     {
     	click_chatter("Invalid header\n");
     }
@@ -160,7 +160,7 @@ XStream::tcp_input(WritablePacket *p)
 					tp->snd_cwnd >= tp->snd_wnd) {
 
 					/* this is a pure ack for outstanding data. */
-					debug_output(VERB_TCP, "[%s] got pure ack: [%u]", SPKRNAME, ti.ti_ack);
+					//debug_output(VERB_TCP, "[%s] got pure ack: [%u]", SPKRNAME, ti.ti_ack);
 					++(get_transport()->_tcpstat.tcps_predack);
 					if (ts_present)
 						tcp_xmit_timer((get_transport()->tcp_now()) - ts_ecr+1);
@@ -201,8 +201,8 @@ XStream::tcp_input(WritablePacket *p)
 				 * we have enough buffer space to take it.
 				 */
 
-				debug_output(VERB_TCP, "[%s] got pure data: [%u]", SPKRNAME, ti.ti_seq);
-				debug_output(VERB_TCPSTATS, "input (fp) updating rcv_nxt [%u] -> [%u]", tp->rcv_nxt, tp->rcv_nxt + ti.ti_len);
+				//debug_output(VERB_TCP, "[%s] got pure data: [%u]", SPKRNAME, ti.ti_seq);
+				//debug_output(VERB_TCPSTATS, "input (fp) updating rcv_nxt [%u] -> [%u]", tp->rcv_nxt, tp->rcv_nxt + ti.ti_len);
 				tp->rcv_nxt += ti.ti_len;
 
 				// Update some TCP Stats
@@ -219,7 +219,7 @@ XStream::tcp_input(WritablePacket *p)
 				 * in-order presentation to the "application socket" which in the
 				 * TCPget_transport is the stateless pull port. */
 				if (_q_recv.push(copy, ti.ti_seq, ti.ti_seq + ti.ti_len) < 0) {
-					debug_output(VERB_ERRORS, "Fast Path segment push into q_recv FAILED");
+					//debug_output(VERB_ERRORS, "Fast Path segment push into q_recv FAILED");
 				}
 
 				// If the reassembly queue has data, a gap should have just been
@@ -232,7 +232,7 @@ XStream::tcp_input(WritablePacket *p)
 						ProcessPollEvent(port, POLLIN);
 					}
 					check_for_and_handle_pending_recv();
-					debug_output(VERB_TCPSTATS, "input (fp) updating rcv_nxt to [%u]", tp->rcv_nxt);
+					//debug_output(VERB_TCPSTATS, "input (fp) updating rcv_nxt to [%u]", tp->rcv_nxt);
 				}
 
 				tp->t_flags |= TF_DELACK;
@@ -289,7 +289,7 @@ XStream::tcp_input(WritablePacket *p)
 
 			// // If the app is ready for a new connection, alert it
 			// XSocketMsg *acceptXSM = sk->pendingAccepts.front();
-			// ReturnResult(_dport, acceptXSM);
+			// get_transport()->ReturnResult(_dport, acceptXSM);
 			// sk->pendingAccepts.pop();
 			// delete acceptXSM;
 
@@ -337,7 +337,7 @@ XStream::tcp_input(WritablePacket *p)
 				xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
 				connect_msg->set_ddag(src_path.unparse().c_str());
 				connect_msg->set_status(X_Connect_Msg::XCONNECTED);
-				ReturnResult(port, &xsm);
+				get_transport()->ReturnResult(port, &xsm);
 
 				/* Apply Window Scaling Options if set in incoming header */
 				if ((tp->t_flags & (TF_RCVD_SCALE | TF_REQ_SCALE)) == 
@@ -622,17 +622,17 @@ XStream::tcp_input(WritablePacket *p)
 					tp->t_rtt = 0;
 					tp->snd_nxt = ti.ti_ack;
 					tp->snd_cwnd = tp->t_maxseg;
-					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, 3 dups, slowstart", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd);
+					//debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, 3 dups, slowstart", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd);
 					tcp_output();
 					tp->snd_cwnd = tp->snd_ssthresh + tp->t_maxseg *
 						tp->t_dupacks;
-					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, 3 dups, slowstart", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd );
+					//debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, 3 dups, slowstart", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd );
 					if (SEQ_GT(onxt, tp->snd_nxt)) 
 						tp->snd_nxt = onxt;
 					goto drop;
 				} else if (tp->t_dupacks > TCP_REXMT_THRESH) {
 					tp->snd_cwnd += tp->t_maxseg;
-					debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, dups", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd );
+					//debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, dups", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd );
 					tcp_output();
 					goto drop;
 				}
@@ -645,7 +645,7 @@ XStream::tcp_input(WritablePacket *p)
 	    if (tp->t_dupacks > TCP_REXMT_THRESH && 
 		    tp->snd_cwnd > tp->snd_ssthresh) {  
 			tp->snd_cwnd = tp->snd_ssthresh;
-			debug_output(VERB_TCP, "%u: cwnd: %u, reduced to ssthresh", get_transport()->tcp_now(), tp->snd_cwnd );  
+			//debug_output(VERB_TCP, "%u: cwnd: %u, reduced to ssthresh", get_transport()->tcp_now(), tp->snd_cwnd );  
 	    }
 	    tp->t_dupacks = 0; 
 
@@ -659,7 +659,7 @@ XStream::tcp_input(WritablePacket *p)
 
 	    /* 903 */
 
-	   debug_output(VERB_TCP, "[%s] now: [%u]  RTT measurement: ts_present: %u, now: %u, ecr: %u", SPKRNAME, get_transport()->tcp_now(), ts_present, get_transport()->tcp_now(), ts_ecr); 
+	   //debug_output(VERB_TCP, "[%s] now: [%u]  RTT measurement: ts_present: %u, now: %u, ecr: %u", SPKRNAME, get_transport()->tcp_now(), ts_present, get_transport()->tcp_now(), ts_ecr); 
 
 	    if (ts_present) 
 			tcp_xmit_timer(get_transport()->tcp_now() - ts_ecr + 1); 
@@ -685,7 +685,7 @@ XStream::tcp_input(WritablePacket *p)
 		if (cw > tp->snd_ssthresh ) 
 		    incr = incr * incr / cw; 
 		tp->snd_cwnd = min(cw + incr, (u_int) TCP_MAXWIN << tp->snd_scale); 
-		debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, increase: %u", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd, incr); 		
+		//debug_output(VERB_TCP, "[%s] now: [%u] cwnd: %u, increase: %u", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd, incr); 		
 	    }
 
 	    /* 943 */
@@ -718,7 +718,7 @@ XStream::tcp_input(WritablePacket *p)
 				tcp_set_state(TCPS_TIME_WAIT);  
 				tp->t_timer[TCPT_2MSL] = 2 * TCPTV_MSL;
 				if (_q_recv.push(copy, ti.ti_seq, ti.ti_seq + ti.ti_len < 0)) {
-					debug_output(VERB_ERRORS, "TCPClosing segment push into reassembly Queue FAILED");
+					//debug_output(VERB_ERRORS, "TCPClosing segment push into reassembly Queue FAILED");
 				}
 				
 				if (! _q_recv.is_empty() && has_pullable_data()) {
@@ -728,7 +728,7 @@ XStream::tcp_input(WritablePacket *p)
 						ProcessPollEvent(port, POLLIN);
 					}
 					check_for_and_handle_pending_recv();
-					debug_output(VERB_TCPSTATS, "input (closing) updating rcv_nxt to [%u]", tp->rcv_nxt);
+					//debug_output(VERB_TCPSTATS, "input (closing) updating rcv_nxt to [%u]", tp->rcv_nxt);
 				}
 				
 			}
@@ -807,7 +807,7 @@ dodata:
 		 * TCPget_transport is the stateless pull port.
 		 */
 		if (_q_recv.push(copy, ti.ti_seq, ti.ti_seq + ti.ti_len) < 0) {
-			debug_output(VERB_ERRORS, "Slow Path segment push into reassembly Queue FAILED");
+			//debug_output(VERB_ERRORS, "Slow Path segment push into reassembly Queue FAILED");
 		}	
 		
 		if (! _q_recv.is_empty() && has_pullable_data()) {
@@ -817,7 +817,7 @@ dodata:
 				ProcessPollEvent(port, POLLIN);
 			}
 			check_for_and_handle_pending_recv();
-			debug_output(VERB_TCPSTATS, "input (sp) updating rcv_nxt to [%u]", tp->rcv_nxt);
+			//debug_output(VERB_TCPSTATS, "input (sp) updating rcv_nxt to [%u]", tp->rcv_nxt);
 		}
 
 		/* end TCP_REASS */ 
@@ -857,7 +857,7 @@ dodata:
 			// the socket is really disconnected
 			break;
 		case TCPS_TIME_WAIT:
-			debug_output(VERB_TCP, "%u: TIME_WAIT", get_transport()->tcp_now());
+			//debug_output(VERB_TCP, "%u: TIME_WAIT", get_transport()->tcp_now());
 			tp->t_timer[TCPT_2MSL] = 2 * TCPTV_MSL;
 			break;
 		}
@@ -865,7 +865,7 @@ dodata:
 
     /*1163*/
     if (needoutput || (tp->t_flags & TF_ACKNOW)) {
-		debug_output(VERB_TCPSTATS, "[%s] we need output! true?: [%x] needoutput: [%x]", SPKRNAME, (tp->t_flags & TF_ACKNOW), needoutput);
+		//debug_output(VERB_TCPSTATS, "[%s] we need output! true?: [%x] needoutput: [%x]", SPKRNAME, (tp->t_flags & TF_ACKNOW), needoutput);
 		tcp_output();
     }
 
@@ -898,7 +898,7 @@ dropwithreset:
 	return;
 
 drop:
-    debug_output(VERB_TCP, "[%s] tcpcon::input drop", SPKRNAME); 
+    //debug_output(VERB_TCP, "[%s] tcpcon::input drop", SPKRNAME); 
 	copy -> kill();
     p->kill();
     return ;
@@ -929,7 +929,7 @@ XStream::tcp_output()
     idle = (tp->snd_max == tp->snd_una);
     if (idle && tp->t_idle >= tp->t_rxtcur) { 
        tp->snd_cwnd = tp->t_maxseg;
-       debug_output(VERB_TCP, "[%s] now: [%u] cnwd: %u, been idle", SPKRNAME, get_transport()->tcp_now()); 
+       //debug_output(VERB_TCP, "[%s] now: [%u] cnwd: %u, been idle", SPKRNAME, get_transport()->tcp_now()); 
     }
 
 	// TCP FIFO (Addresses (and seq num) decrease in this dir ->)
@@ -987,7 +987,7 @@ again:
     if (win > 0) { 
 		long adv = min(win, (long)TCP_MAXWIN << tp->rcv_scale) -
 		(tp->rcv_adv - tp->rcv_nxt);
-		debug_output(VERB_TCPSTATS, "[%s] adv: [%d] = min([%u],[%u]):  - (radv: [%u] rnxt: [%u]) [%u]", SPKRNAME, adv, win, (long)TCP_MAXWIN << tp->rcv_scale, tp->rcv_adv, tp->rcv_nxt, tp->rcv_adv-tp->rcv_nxt);
+		//debug_output(VERB_TCPSTATS, "[%s] adv: [%d] = min([%u],[%u]):  - (radv: [%u] rnxt: [%u]) [%u]", SPKRNAME, adv, win, (long)TCP_MAXWIN << tp->rcv_scale, tp->rcv_adv, tp->rcv_nxt, tp->rcv_adv-tp->rcv_nxt);
 		/* Slight Hack Below - we are using (t_maxseg + 1) here to ensure that
 		 * once we have recvd at least 1 byte more than a full MSS we goto send
 		 * to dispatch an ACK to the sender. This is necessary because the
@@ -997,7 +997,7 @@ again:
 		if (2 * adv >= so_recv_buffer_size )
 			goto send;
     } else {
-		debug_output(VERB_TCPSTATS, "[%s] win: [%u]  (radv: [%u] rnxt: [%u]) [%u]", SPKRNAME, win, tp->rcv_adv, tp->rcv_nxt, tp->rcv_adv-tp->rcv_nxt);
+		//debug_output(VERB_TCPSTATS, "[%s] win: [%u]  (radv: [%u] rnxt: [%u]) [%u]", SPKRNAME, win, tp->rcv_adv, tp->rcv_nxt, tp->rcv_adv-tp->rcv_nxt);
 	}
 
     /*174*/
@@ -1039,7 +1039,7 @@ send:
 
 			// Here we set the Window Scale option if it was requested of us to
 			// do so
-			debug_output(VERB_DEBUG, "[%s] t_flags: [%x]", SPKRNAME, tp->t_flags);
+			//debug_output(VERB_DEBUG, "[%s] t_flags: [%x]", SPKRNAME, tp->t_flags);
 			if ((tp->t_flags & TF_REQ_SCALE) && 
 				((flags & TH_ACK) == 0 ||
 				 (tp->t_flags & TF_RCVD_SCALE))) { 
@@ -1054,14 +1054,14 @@ send:
 	}
 
     /* 253 timestamp generation */
-//	debug_output(VERB_DEBUG, "[%s] timestamp: [%X] [%x] [%x] [%x]", SPKRNAME, (tp->t_flags),((flags & TH_RST) == 0), ((flags & (TH_SYN | TH_ACK)) == TH_SYN),(tp->t_flags & TF_RCVD_TSTMP));
+//	//debug_output(VERB_DEBUG, "[%s] timestamp: [%X] [%x] [%x] [%x]", SPKRNAME, (tp->t_flags),((flags & TH_RST) == 0), ((flags & (TH_SYN | TH_ACK)) == TH_SYN),(tp->t_flags & TF_RCVD_TSTMP));
 
 	//HACK FIX TO MAKE TIMESTAMPS GET Printed as the first stmt evalutates false when window scaling is > 0
     if (((tp->t_flags & (TF_REQ_TSTMP | TF_NOOPT)) == TF_REQ_TSTMP || 1 ) && 
 	(flags & TH_RST) == 0 && 
 	((flags & (TH_SYN | TH_ACK)) == TH_SYN || 
 	(tp->t_flags & TF_RCVD_TSTMP))) { 
-		debug_output(VERB_DEBUG, "[%s] timestamp: SETTING TIMESTAMP", SPKRNAME);
+		//debug_output(VERB_DEBUG, "[%s] timestamp: SETTING TIMESTAMP", SPKRNAME);
 		u_long *lp = (u_long*) (opt + optlen); 
 		*lp++ = htonl(TCPOPT_TSTAMP_HDR); 
 		*lp++ = htonl(get_transport()->tcp_now()); 
@@ -1069,7 +1069,7 @@ send:
 		optlen += TCPOLEN_TSTAMP_APPA; 
     } else { 
 		// Remove this clause after it's been debugged and timestamps are working properly
-		debug_output(VERB_DEBUG, "[%s] timestamp: NOT setting timestamp", SPKRNAME);
+		//debug_output(VERB_DEBUG, "[%s] timestamp: NOT setting timestamp", SPKRNAME);
 	}
 		
     hdrlen += optlen; 
@@ -1083,7 +1083,7 @@ send:
     if (len) {
 		p = _q_usr_input.get(off); 
 		if (!p) { 
-			debug_output(VERB_ERRORS, "[%s] offset [%u] not in fifo!", SPKRNAME, off); 
+			//debug_output(VERB_ERRORS, "[%s] offset [%u] not in fifo!", SPKRNAME, off); 
 			return; 
 		}
 		if (p->length() > len) {
@@ -1167,7 +1167,7 @@ send:
 
 		if (tp->t_timer[TCPT_REXMT] == 0 && tp->snd_nxt != tp->snd_una) {
 			tp->t_timer[TCPT_REXMT] = tp->t_rxtcur;
-			debug_output(VERB_TCP, "[%s] now: [%u] REXMT set to %u == %f", SPKRNAME, get_transport()->tcp_now(), tp->t_timer[TCPT_REXMT], tp->t_timer[TCPT_REXMT]*0.5 );
+			//debug_output(VERB_TCP, "[%s] now: [%u] REXMT set to %u == %f", SPKRNAME, get_transport()->tcp_now(), tp->t_timer[TCPT_REXMT], tp->t_timer[TCPT_REXMT]*0.5 );
 			if (tp->t_timer[TCPT_PERSIST]) {
 				tp->t_timer[TCPT_PERSIST] = 0;
 				tp->t_rxtshift = 0;
@@ -1194,7 +1194,7 @@ send:
 	xiah.set_plen(p -> length() + send_hdr->hlen()); // XIA payload = transport header + transport-layer data
 	tcp_payload = xiah.encap(tcp_payload, false);
 	delete send_hdr;
-	get_transport().output(NETWORK_PORT).push(tcp_payload);
+	get_transport()->output(NETWORK_PORT).push(tcp_payload);
 
 
 	/* Data has been sent out at this point. If we advertised a positive window
@@ -1254,7 +1254,7 @@ XStream::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 	xiah_new.set_plen(tcph->hlen());
 	p = xiah_new.encap(p, false);
 	delete tcph;
-	get_transport().output(NETWORK_PORT).push(p);
+	get_transport()->output(NETWORK_PORT).push(p);
 }
 
 tcp_seq_t
@@ -1275,22 +1275,22 @@ XStream::fasttimo() {
 void 
 XStream::slowtimo() { 
 	int i; 
-	debug_output(VERB_TIMERS, "[%s] now: [%u] Timers: %s %d %s %d %s %d %s %d %s %d", 
-	SPKRNAME,
-	get_transport()->tcp_now(), 
-	tcptimers[0], tp->t_timer[0], 
-	tcptimers[1], tp->t_timer[1], 
-	tcptimers[2], tp->t_timer[2], 
-	tcptimers[3], tp->t_timer[3], 
-	tcptimers[4], tp->t_timer[4] );  
+	//debug_output(VERB_TIMERS, "[%s] now: [%u] Timers: %s %d %s %d %s %d %s %d %s %d", 
+	// SPKRNAME,
+	// get_transport()->tcp_now(), 
+	// tcptimers[0], tp->t_timer[0], 
+	// tcptimers[1], tp->t_timer[1], 
+	// tcptimers[2], tp->t_timer[2], 
+	// tcptimers[3], tp->t_timer[3], 
+	// tcptimers[4], tp->t_timer[4] );  
 
 	for ( i = 0; i < TCPT_NTIMERS; i++ ) { 
-	  // debug_output(VERB_TCP, "%u: XStream::slowtimo: %s %d\n", get_transport()->tcp_now(), tcptimers[i], tp->t_timer[i]); 
+	  // //debug_output(VERB_TCP, "%u: XStream::slowtimo: %s %d\n", get_transport()->tcp_now(), tcptimers[i], tp->t_timer[i]); 
 		if ( tp->t_timer[i] && --(tp->t_timer[i]) == 0) { 
 		  // StringAccum sa;
 		  // sa << *(flowid()); 
 
-		  //   debug_output(VERB_TIMERS, "[%s] now: [%u] TIMEOUT %s: %s, now: %u", SPKRNAME, get_transport()->tcp_now(), sa.c_str(), tcptimers[i], get_transport()->tcp_now()); 
+		  //   //debug_output(VERB_TIMERS, "[%s] now: [%u] TIMEOUT %s: %s, now: %u", SPKRNAME, get_transport()->tcp_now(), sa.c_str(), tcptimers[i], get_transport()->tcp_now()); 
 		    tcp_timers(i); 
 		} 
 	}
@@ -1330,7 +1330,7 @@ XStream::tcp_timers (int timer) {
 			xsm.set_sequence(0); // TODO: what should This be?
 			xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
 			connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
-			ReturnResult(port, &xsm);
+			get_transport()->ReturnResult(port, &xsm);
 
 			if (polling) {
 				printf("checking poll event for %d from timer\n", port);
@@ -1383,7 +1383,7 @@ dropit:
 		    if ( win < 2 )
 			win = 2; 
 		    tp->snd_cwnd = tp->t_maxseg; 
-		    debug_output(VERB_TCP, "%u: cwnd: %u, TCPT_REXMT", get_transport()->tcp_now(), tp->snd_cwnd); 
+		    //debug_output(VERB_TCP, "%u: cwnd: %u, TCPT_REXMT", get_transport()->tcp_now(), tp->snd_cwnd); 
 		    tp->snd_ssthresh = win * tp->t_maxseg;
 		    tp->t_dupacks = 0 ; 
 		    }
@@ -1423,7 +1423,7 @@ XStream::tcp_xmit_timer(short rtt) {
 	short delta; 
 	get_transport()->_tcpstat.tcps_rttupdated++; 
 	
-	debug_output(VERB_TIMERS, "[%s] now: [%u]: tcp_xmit_timer: srtt [%d] cur rtt [%d]\n", SPKRNAME, get_transport()->tcp_now(), tp->t_srtt, rtt); 
+	//debug_output(VERB_TIMERS, "[%s] now: [%u]: tcp_xmit_timer: srtt [%d] cur rtt [%d]\n", SPKRNAME, get_transport()->tcp_now(), tp->t_srtt, rtt); 
 	if (tp->t_srtt != 0) {
 		/*
 		 * srtt is stored as fixed point with 3 bits after the
@@ -1475,7 +1475,7 @@ XStream::tcp_xmit_timer(short rtt) {
 	 */
 	TCPT_RANGESET(tp->t_rxtcur, TCP_REXMTVAL(tp),
 	    tp->t_rttmin, TCPTV_REXMTMAX);
-	debug_output(VERB_TCP, "[%s] now: [%u]: rxt_cur: %u, RXMTVAL: %u, rttmin: %u, RXMTMAX: %u \n", SPKRNAME, get_transport()->tcp_now(), tp->t_rxtcur, TCP_REXMTVAL(tp), tp->t_rttmin,TCPTV_REXMTMAX ); 
+	//debug_output(VERB_TCP, "[%s] now: [%u]: rxt_cur: %u, RXMTVAL: %u, rttmin: %u, RXMTMAX: %u \n", SPKRNAME, get_transport()->tcp_now(), tp->t_rxtcur, TCP_REXMTVAL(tp), tp->t_rttmin,TCPTV_REXMTMAX ); 
 	
 	/*
 	 * We received an ack for a packet that wasn't retransmitted;
@@ -1509,7 +1509,7 @@ XStream::tcp_mss(u_int offer) {
 	}
 	tp->t_maxseg = mss;
 	tp->snd_cwnd = mss; 
-	debug_output(VERB_TCP, "[%s] now: [%u] cnwd: [%u] rcvd_offer: [%u] tcp_mss: [%u]", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd, offer, tp->t_maxseg); 
+	//debug_output(VERB_TCP, "[%s] now: [%u] cnwd: [%u] rcvd_offer: [%u] tcp_mss: [%u]", SPKRNAME, get_transport()->tcp_now(), tp->snd_cwnd, offer, tp->t_maxseg); 
 
 	return mss; 
 }
@@ -1530,8 +1530,8 @@ XStream::usrsend(WritablePacket *p)
     }
 
     if (tp->so_flags & SO_FIN_AFTER_UDP_IDLE) {
-		debug_output(VERB_TIMERS, "[%s] tcpcon::usrsend setting timer TCPT_IDLE to [%d]", 
-			SPKRNAME, get_transport()->globals()->so_idletime); 
+		//debug_output(VERB_TIMERS, "[%s] tcpcon::usrsend setting timer TCPT_IDLE to [%d]", 
+			// SPKRNAME, get_transport()->globals()->so_idletime); 
 		tp->t_timer[TCPT_IDLE] = get_transport()->globals()->so_idletime;  
 	}
 
@@ -1543,13 +1543,13 @@ XStream::usrsend(WritablePacket *p)
 		tcp_set_state(TCPS_SYN_SENT);
 	}
 
-	if (tp->t_sl_flags == TH_SYN) {
-		usropen();
-	}
+	// if (tp->t_sl_flags == TH_SYN) {
+	// 	usropen();
+	// }
 
-	if (tp->t_sl_flags == TH_FIN) {
-		usrclosed();
-	}
+	// if (tp->t_sl_flags == TH_FIN) {
+	// 	usrclosed();
+	// }
 
 	if (p) {
 		retval = _q_usr_input.push(p); 
@@ -1588,12 +1588,12 @@ XStream::usropen()
 { 
 	if (tp->iss == 0) {
 		tp->iss = 0x11111111; 
-		debug_output(VERB_ERRORS, "Setting initial sequence to [%d], because it was 0", tp->iss);
+		//debug_output(VERB_ERRORS, "Setting initial sequence to [%d], because it was 0", tp->iss);
 		// Setting a non-zero initial sequence number because I see some weird
 		// problems in wireshark when initial seq is 0
 	}
-    debug_output(VERB_STATES,"[%s] usropen with state <%s>, initial seq num <%d> \n", 
-    	dispatcher()->name().c_str(), tcpstates[tp->t_state], tp->iss); 
+    //debug_output(VERB_STATES,"[%s] usropen with state <%s>, initial seq num <%d> \n", 
+    	// dispatcher()->name().c_str(), tcpstates[tp->t_state], tp->iss); 
     if (tp->t_state == TCPS_CLOSED || tp->t_state == TCPS_LISTEN)
 		tcp_set_state(TCPS_SYN_SENT); 
     tcp_output(); 
@@ -1603,7 +1603,7 @@ XStream::usropen()
 inline void 
 XStream::initialize(const int port)
 { 
-    dispatcher()->debug_output(VERB_STATES,"[%s] initialize for port <%d>\n", 
+    dispatcher()->//debug_output(VERB_STATES,"[%s] initialize for port <%d>\n", 
     	dispatcher()->name().c_str(), port); 
     if ( port == 1 ) 
    	usropen(); 
@@ -1639,59 +1639,59 @@ XStream::set_state(const HandlerState new_state) {
 // 	int opt, optlen; 
 // 	optlen = 0; 
 
-// 	debug_output(VERB_DEBUG, "[%s] tcp_dooption cnt [%u]\n", SPKRNAME, cnt);
+// 	//debug_output(VERB_DEBUG, "[%s] tcp_dooption cnt [%u]\n", SPKRNAME, cnt);
 // 	for (; cnt > 0; cnt -= optlen, cp += optlen) { 
 
-// 		debug_output(VERB_DEBUG, "[%s] processing opt: optlen:<%u>,cnt:<%u>", SPKRNAME, 
+// 		//debug_output(VERB_DEBUG, "[%s] processing opt: optlen:<%u>,cnt:<%u>", SPKRNAME, 
 // 				optlen, cnt);
 // 		opt = cp[0]; 
 // 		if (opt == TCPOPT_EOL) {
-// 			debug_output(VERB_DEBUG, "b1");
+// 			//debug_output(VERB_DEBUG, "b1");
 // 			break; 
 // 		}
 // 		if (opt == TCPOPT_NOP) 
 // 			optlen = 1; 
 // 		else {
 // 			if (cnt < 2){
-// 				debug_output(VERB_DEBUG, "b2");
+// 				//debug_output(VERB_DEBUG, "b2");
 // 				break; 
 // 			}
 // 			optlen = cp[1]; 
 // 			if (optlen < 1 || optlen > cnt ) {
-// 				debug_output(VERB_DEBUG, "b3, optlen: [%x] cnt: [%x]", optlen, cnt);
+// 				//debug_output(VERB_DEBUG, "b3, optlen: [%x] cnt: [%x]", optlen, cnt);
 // 				break;
 // 			}
 // 		}
-// 		debug_output(VERB_DEBUG, "[%s] doopts: Entering options switch stmt, optlen [%x]", SPKRNAME, optlen);
+// 		//debug_output(VERB_DEBUG, "[%s] doopts: Entering options switch stmt, optlen [%x]", SPKRNAME, optlen);
 // 		switch (opt) { 
 // 			case TCPOPT_MAXSEG:
-// 					debug_output(VERB_DEBUG, "[%s] doopts: case MAXSEG", SPKRNAME);
+// 					//debug_output(VERB_DEBUG, "[%s] doopts: case MAXSEG", SPKRNAME);
 // 				if (optlen != TCPOLEN_MAXSEG) {
-// 					debug_output(VERB_DEBUG, "[%s] doopts: optlen: [%x] maxseg: [%x]", SPKRNAME, optlen, TCPOLEN_MAXSEG);
+// 					//debug_output(VERB_DEBUG, "[%s] doopts: optlen: [%x] maxseg: [%x]", SPKRNAME, optlen, TCPOLEN_MAXSEG);
 // 					continue;
 // 				}
 // 				if (!(ti->tcp_hdr.th_flags & TH_SYN)) {
-// 					debug_output(VERB_DEBUG, "[%s] tcp_dooption SYN flag not set", SPKRNAME);
+// 					//debug_output(VERB_DEBUG, "[%s] tcp_dooption SYN flag not set", SPKRNAME);
 // 					continue;
 // 				}
 // 				memcpy((char*) &mss, (char*) cp + 2, sizeof(mss)); 
-// 				//debug_output(VERB_DEBUG, "[%s] doopts: mss p0: [%x]", SPKRNAME, mss);
+// 				////debug_output(VERB_DEBUG, "[%s] doopts: mss p0: [%x]", SPKRNAME, mss);
 // 				mss = ntohs(mss); 
-// 				//debug_output(VERB_DEBUG, "[%s] doopts: mss p1: [%x]", SPKRNAME, mss);
+// 				////debug_output(VERB_DEBUG, "[%s] doopts: mss p1: [%x]", SPKRNAME, mss);
 // 				tcp_mss(mss); 
 // //				tp->t_maxseg = ntohs((u_short)*((char*)cp + 2)); //BUG WHY are we
 // //				setting this twice? once here and once in the line above?!
-// //				debug_output(VERB_DEBUG, "[%s] doopts: mss p2: [%x]", SPKRNAME, mss);
+// //				//debug_output(VERB_DEBUG, "[%s] doopts: mss p2: [%x]", SPKRNAME, mss);
 // 				//avila this is 5... something here is broken. statically
 // 				//setting MSS whenever it dips below 800
 // //				if (tp->t_maxseg < 800 || tp->t_maxseg > 1460) {
 // //					tp->t_maxseg = 1400;
-// //					debug_output(VERB_ERRORS, "doopts: Recieved MAXSEG value [%d], setting to 1400", tp->t_maxseg);
+// //					//debug_output(VERB_ERRORS, "doopts: Recieved MAXSEG value [%d], setting to 1400", tp->t_maxseg);
 // //				}
 // 				break;
 
 // 			case TCPOPT_TIMESTAMP:
-// 				debug_output(VERB_DEBUG, "[%s] doopts: case TIMESTAMP", SPKRNAME);
+// 				//debug_output(VERB_DEBUG, "[%s] doopts: case TIMESTAMP", SPKRNAME);
 // 				if (optlen != TCPOLEN_TIMESTAMP)
 // 					continue;
 // 				*ts_present = 1; 
@@ -1700,9 +1700,9 @@ XStream::set_state(const HandlerState new_state) {
 // 				bcopy((char *)cp + 6, (char *)ts_ecr, sizeof(*ts_ecr)); //FIXME: Misaligned
 // 				*ts_ecr = ntohl(*ts_ecr); 
 
-// 				debug_output(VERB_DEBUG, "[%s] doopts: ts_val [%u] ts_ecr [%u]", SPKRNAME, *ts_val, *ts_ecr);
+// 				//debug_output(VERB_DEBUG, "[%s] doopts: ts_val [%u] ts_ecr [%u]", SPKRNAME, *ts_val, *ts_ecr);
 // 				if (ti->tcp_hdr.th_flags & TH_SYN) { 
-// 					debug_output(VERB_DEBUG, "[%s] doopts: recvd a SYN timetamp, ENABLING TIMESTAMPS", SPKRNAME);
+// 					//debug_output(VERB_DEBUG, "[%s] doopts: recvd a SYN timetamp, ENABLING TIMESTAMPS", SPKRNAME);
 // 					tp->t_flags |= TF_RCVD_TSTMP; 
 // 					tp->ts_recent = *ts_val; 
 // 					tp->ts_recent_age = get_transport()->tcp_now(); 
@@ -1710,7 +1710,7 @@ XStream::set_state(const HandlerState new_state) {
 // 				break;
 // #ifdef UNDEF 
 // 			case TCPOPT_SACK_PERMITTED:
-// 				debug_output(VERB_DEBUG, "[%s] doopts: case SACK", SPKRNAME);
+// 				//debug_output(VERB_DEBUG, "[%s] doopts: case SACK", SPKRNAME);
 // 				if (optlen != TCPOLEN_SACK_PERMITTED)
 // 					continue;
 // 				if (!(flags & TO_SYN))
@@ -1731,7 +1731,7 @@ XStream::set_state(const HandlerState new_state) {
 // 				break;
 // #endif 
 // 			case TCPOPT_WSCALE:
-// 				debug_output(VERB_DEBUG, "[%s] doopts: case WSCALE", SPKRNAME);
+// 				//debug_output(VERB_DEBUG, "[%s] doopts: case WSCALE", SPKRNAME);
 // 				if (optlen != TCPOLEN_WSCALE) 
 // 					continue;
 // 				if (!(ti->tcp_hdr.th_flags & TH_SYN)) 
@@ -1739,34 +1739,34 @@ XStream::set_state(const HandlerState new_state) {
 // 				tp->t_flags |=  TF_RCVD_SCALE;
 				
 // 				tp->requested_s_scale = min(cp[2], TCP_MAX_WINSHIFT); 
-// 				debug_output(VERB_DEBUG, "[%s] WSCALE set, flags [%x], req_s_sc [%x]\n", SPKRNAME,
+// 				//debug_output(VERB_DEBUG, "[%s] WSCALE set, flags [%x], req_s_sc [%x]\n", SPKRNAME,
 // 						tp->t_flags, tp->requested_s_scale );
 // 				break;
 // 			default: 
 // 			continue; 
 // 		}
 //     }
-// 	debug_output(VERB_DEBUG, "[%s] doopts: finished", SPKRNAME);
+// 	//debug_output(VERB_DEBUG, "[%s] doopts: finished", SPKRNAME);
 // }
 
 
 void
 XStream::print_state(StringAccum &sa) 
 { 
-	int i;
-	sa << tcpstates[tp->t_state] << "\n"; 
+	// int i;
+	// sa << tcpstates[tp->t_state] << "\n"; 
 	
-	sa.snprintf(80, "| Seq    : snd_nxt: %u, snd_una: %u, (in-flight: %u)\n", 
-		tp->snd_nxt, tp->snd_una, tp->snd_nxt - tp->snd_una); 
-	sa.snprintf(80, "| Windows: rcv_adv: %u, rcv_wnd: %u, snd_cwnd: %u \n",
-		tp->rcv_adv, tp->rcv_wnd, tp->snd_cwnd); 
-	sa.snprintf(80, "| Timing: t_srtt: %u, t_rttvar: %u, now: %u\n",
-		tp->t_srtt, tp->t_rttvar, get_transport()->tcp_now()); 
+	// sa.snprintf(80, "| Seq    : snd_nxt: %u, snd_una: %u, (in-flight: %u)\n", 
+	// 	tp->snd_nxt, tp->snd_una, tp->snd_nxt - tp->snd_una); 
+	// sa.snprintf(80, "| Windows: rcv_adv: %u, rcv_wnd: %u, snd_cwnd: %u \n",
+	// 	tp->rcv_adv, tp->rcv_wnd, tp->snd_cwnd); 
+	// sa.snprintf(80, "| Timing: t_srtt: %u, t_rttvar: %u, now: %u\n",
+	// 	tp->t_srtt, tp->t_rttvar, get_transport()->tcp_now()); 
 
-	sa << ("| Timers: "); 
-	for(i=0; i<TCPT_NTIMERS; i++)
-	    sa.snprintf(32, "%s: %d ", tcptimers[i], tp->t_timer[i]); 
-	sa << "\n"; 
+	// sa << ("| Timers: "); 
+	// for(i=0; i<TCPT_NTIMERS; i++)
+	//     sa.snprintf(32, "%s: %d ", tcptimers[i], tp->t_timer[i]); 
+	// sa << "\n"; 
 } 
 
 /**
@@ -1777,7 +1777,7 @@ XStream::print_state(StringAccum &sa)
 void XStream::check_for_and_handle_pending_recv() {
 	if (recv_pending) {
 		int bytes_returned = read_from_recv_buf(tcp_conn->pending_recv_msg);
-		ReturnResult(port, pending_recv_msg, bytes_returned);
+		get_transport()->ReturnResult(port, pending_recv_msg, bytes_returned);
 		recv_pending = false;
 		delete pending_recv_msg;
 		pending_recv_msg = NULL;
@@ -1886,7 +1886,7 @@ XStream::XStream(XTRANSPORT *transport, const unsigned short port)
     */
   //   if (dispatcher()->dispatch_code(true, 1) == 
 	 //    (MFD_DISPATCH_MFD_DIRECT | MFD_DISPATCH_PULL)) { 
-		// debug_output(VERB_DISPATCH, "[%s].<%x> Creating _stateless_pull task", 
+		// //debug_output(VERB_DISPATCH, "[%s].<%x> Creating _stateless_pull task", 
 		// 	dispatcher()->name().c_str(), this); 
 		// _stateless_pull = new Task(&pull_stateless_input, this); 
 		// _stateless_pull->initialize(dispatcher()->router(), true); 
@@ -1894,7 +1894,7 @@ XStream::XStream(XTRANSPORT *transport, const unsigned short port)
 
     // StringAccum sa;
     // sa << *(flowid()); 
-    // debug_output(VERB_STATES, "[%s] new connection %s %s", SPKRNAME, sa.c_str(), tcpstates[tp->t_state]); 
+    // //debug_output(VERB_STATES, "[%s] new connection %s %s", SPKRNAME, sa.c_str(), tcpstates[tp->t_state]); 
 }
 
 
@@ -1923,7 +1923,7 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
     TCPQueueElt *wrk = NULL ; 
     StringAccum sa;
 
-	//debug_output(VERB_TCPQUEUE, "TCPQueue:push pkt:%ubytes, seq:%ubytes", p->length(), seq_nxt-seq); 
+	////debug_output(VERB_TCPQUEUE, "TCPQueue:push pkt:%ubytes, seq:%ubytes", p->length(), seq_nxt-seq); 
 	
 	/* TCP Queue (Addresses (and seq num) decrease in this dir ->)
 	 *
@@ -1950,8 +1950,8 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 		if (!qe) { return -2; }
 		_q_first = _q_last = _q_tail = qe; 
 		qe->nxt = NULL; 
-		debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (empty)", _con->SPKRNAME); 
-		debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
+		//debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (empty)", _con->SPKRNAME); 
+		//debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
 		return 0; 
     }
 
@@ -1975,9 +1975,9 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 		if (_q_last == NULL)
 			loop_last();
 
-		debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (%s)", _con->SPKRNAME,
+		//debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (%s)", _con->SPKRNAME,
 			perfect?"perfect tail":"tail"); 
-		debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
+		//debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
 		return 0; 
 	}
 
@@ -2002,7 +2002,7 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 		if (overlap > 0) {
 			if (overlap > p->length()) { return -2; }
 			p->take(overlap);
-			debug_output(VERB_TCPQUEUE, "[%s] Tail overlap [%d] bytes", _con->SPKRNAME, overlap);
+			//debug_output(VERB_TCPQUEUE, "[%s] Tail overlap [%d] bytes", _con->SPKRNAME, overlap);
 			// Should we update qe->seq_nxt? I don't think we need to.
 		}
 
@@ -2021,8 +2021,8 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 		if (_q_first->seq_nxt < _q_first->nxt->seq)
 			_q_last = _q_first;
 
-		debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (head)", _con->SPKRNAME); 
-		debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
+		//debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (head)", _con->SPKRNAME); 
+		//debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
 		return 0; 
 	} 
 	
@@ -2060,7 +2060,7 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 	int overlap = (int) (wrk->seq_nxt - seq);
 	if (overlap > 0) {
 		if (overlap > p->length()) { return -2; }
-		debug_output(VERB_TCPQUEUE, "[%s] head overlap [%d] bytes", _con->SPKRNAME, overlap);
+		//debug_output(VERB_TCPQUEUE, "[%s] head overlap [%d] bytes", _con->SPKRNAME, overlap);
 		p->pull(overlap);
 		seq += overlap;
 	}
@@ -2070,7 +2070,7 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 		overlap = (int) (seq_nxt - wrk->nxt->seq);
 		if (overlap > 0) {
 			if (overlap > p->length()) { return -2; }
-			debug_output(VERB_TCPQUEUE, "[%s] Tail overlap [%d] bytes", _con->SPKRNAME, overlap);
+			//debug_output(VERB_TCPQUEUE, "[%s] Tail overlap [%d] bytes", _con->SPKRNAME, overlap);
 			p->take(overlap);
 			seq_nxt -= overlap;
 		}
@@ -2085,8 +2085,8 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 
 	loop_last();
     
-	debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (default)", _con->SPKRNAME); 
-	debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
+	//debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (default)", _con->SPKRNAME); 
+	//debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
     return 0; 
 }
 
@@ -2099,10 +2099,10 @@ TCPQueue::loop_last()
 	while (wrk->nxt && (wrk->seq_nxt == wrk->nxt->seq)) {
 		wrk = wrk->nxt;
 		_q_last = wrk; 
-		debug_output(VERB_TCPQUEUE, "Looping _q_last to [%u]", last());
+		//debug_output(VERB_TCPQUEUE, "Looping _q_last to [%u]", last());
 	}
 	_q_last = wrk; 
-	debug_output(VERB_TCPQUEUE, "Looped _q_last to [%u]", last());
+	//debug_output(VERB_TCPQUEUE, "Looped _q_last to [%u]", last());
 }
 
 WritablePacket * 
@@ -2113,14 +2113,14 @@ TCPQueue::pull_front()
 
 	// CASE 1: The queue is empty, nothing to pull
 	if (_q_first == NULL) { 
-		debug_output(VERB_TCPQUEUE, "[%s] QPULL FIRST==NULL", _con->SPKRNAME); 
+		//debug_output(VERB_TCPQUEUE, "[%s] QPULL FIRST==NULL", _con->SPKRNAME); 
 		_q_tail = _q_last = NULL; 
 		return NULL; 
 	}
 
 	// CASE 2: _q_last is NULL because we previously encountered CASE 3
 	if (_q_last == NULL) { 
-		debug_output(VERB_TCPQUEUE, "[%s] QPULL LAST==NULL", _con->SPKRNAME); 
+		//debug_output(VERB_TCPQUEUE, "[%s] QPULL LAST==NULL", _con->SPKRNAME); 
 		return NULL; 
 	}
 
@@ -2128,10 +2128,10 @@ TCPQueue::pull_front()
 	 * _q_last = NULL to indicate that there is no more in-order data to pull
 	 * after this pull */
 	if (_q_first == _q_last) {
-		debug_output(VERB_TCPQUEUE, "[%s] QPULL [%u] FIRST==LAST", _con->SPKRNAME, first()); 
+		//debug_output(VERB_TCPQUEUE, "[%s] QPULL [%u] FIRST==LAST", _con->SPKRNAME, first()); 
 		_q_last = NULL;
 	} else {
-		debug_output(VERB_TCPQUEUE, "[%s] QPULL [%u]", _con->SPKRNAME, first()); 
+		//debug_output(VERB_TCPQUEUE, "[%s] QPULL [%u]", _con->SPKRNAME, first()); 
 	}
 
 	e = _q_first; 

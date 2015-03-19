@@ -16,7 +16,7 @@
 #include <click/string.hh>
 #include <elements/ipsec/sha1_impl.hh>
 #include <click/xiatransportheader.hh>
-
+#include "xtransport.hh"
 
 #if CLICK_USERLEVEL
 #include <list>
@@ -74,18 +74,16 @@ class XIAContentModule;
 class XDatagram : public XGenericTransport {
 
 public:
-	XDatagram(XTRANSPORT *transport, const unsigned short port);
-	~XDatagram() {
-		debug_output(VERB_MFD_QUEUES,
-		             "***** DELETING XDatagram at <%x> ***** \n",
-		             this);
-	};
+	XDatagram(XTRANSPORT *transport, unsigned short port);
+	~XDatagram() {};
+	int read_from_recv_buf(XSocketMsg *xia_socket_msg);
 private:
 
-
+	void push(WritablePacket *p_in);
 	bool should_buffer_received_packet(WritablePacket *p);
 	void add_packet_to_recv_buf(WritablePacket *p);
 	void check_for_and_handle_pending_recv();
+
 	// receive buffer
 	WritablePacket *recv_buffer[MAX_RECV_WIN_SIZE]; // packets we've received but haven't delivered to the app // TODO: start smaller, dynamically resize if app asks for more space (up to MAX)?
 	uint32_t recv_buffer_size; // the number of PACKETS we can buffer (received but not delivered to app)

@@ -16,13 +16,9 @@
 #include <elements/ipsec/sha1_impl.hh>
 #include <click/xiatransportheader.hh>
 #include <clicknet/tcp.h>
+#include "xtransport.hh"
 
-#define TCPOUTFLAGS
-#define TCPSTATES
-#include "clicknet/tcp_fsm.h"
-// #define TCPTIMERS
-#include "clicknet/tcp_timer.h"
-#include "clicknet/tcp_var.h"
+
 
 #if CLICK_USERLEVEL
 #include <list>
@@ -90,25 +86,11 @@ struct mini_tcpip
 	uint16_t ti_urp;
 };
 
-struct tcp_globals
-{
-	int     tcp_keepidle;
-	int     tcp_keepintvl;
-	int     tcp_maxidle;
-	int     tcp_mssdflt;
-	int     tcp_rttdflt;
-	int     so_flags;
-	int     so_idletime;
-	int     window_scale;
-	bool    use_timestamp;
-	uint32_t tcp_now;
-	tcp_seq_t so_recv_buffer_size;
-};
 
 CLICK_DECLS
 
 class XIAContentModule;
-
+class XStream;
 // Queue of packets from transport to socket layer
 class TCPQueue {
 
@@ -197,16 +179,13 @@ private:
 	int verbosity() const;
 };
 
-class XStream  : public GenericConnHandler {
+class XStream  : public XGenericTransport {
 
 public:
-	XStream(XTRANSPORT *transport, const unsigned short port);
-	~XStream() {
-		debug_output(VERB_MFD_QUEUES,
-		             "***** DELETING XStream at <%x> ***** \n",
-		             this);
-	};
-
+	XStream(XTRANSPORT *transport, unsigned short port);
+	~XStream() {};
+	int read_from_recv_buf(XSocketMsg *xia_socket_msg);
+	void check_for_and_handle_pending_recv();
 	/* TCP related core functions */
 	void 	tcp_input(WritablePacket *p);
 	void 	tcp_output();
@@ -224,8 +203,11 @@ public:
 	bool has_pullable_data() { return !_q_recv.is_empty() && SEQ_LT(_q_recv.first(), tp->rcv_nxt); }
 	void print_state(StringAccum &sa);
 
+    XTRANSPORT *get_transport() { return transport; }
 
 private:
+    void set_state(const HandlerState s) {state = s;}
+
 	void 		_tcp_dooptions(u_char *cp, int cnt, const click_tcp *ti,
 	                           int *ts_present, u_long *ts_val, u_long *ts_ecr);
 	void 		tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags);
@@ -291,10 +273,10 @@ XStream::tcp_set_state(short state) {
 
 
 inline int
-XStream::verbosity() const { return get_transport()->verbosity(); }
+XStream::verbosity() const { return XGenericTransport::get_transport()->verbosity(); }
 
 inline int
-TCPQueue::verbosity() const { return _con->get_transport()->verbosity(); }
+TCPQueue::verbosity() const { return _con->XGenericTransport::get_transport()->verbosity(); }
 
 inline int
 TCPFifo::verbosity() const { return _con->get_transport()->verbosity(); }

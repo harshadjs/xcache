@@ -12,10 +12,18 @@
 #include <clicknet/xia.h>
 #include "xiacontentmodule.hh"
 #include "xiaxidroutetable.hh"
-#include <clicknet/udp.h>
+#include <clicknet/tcp.h>
 #include <click/string.hh>
 #include <elements/ipsec/sha1_impl.hh>
 #include <click/xiatransportheader.hh>
+
+#define TCPOUTFLAGS
+#define TCPSTATES
+#include "clicknet/tcp_fsm.h"
+// #define TCPTIMERS
+#include "clicknet/tcp_timer.h"
+#include "clicknet/tcp_var.h"
+
 
 #if CLICK_USERLEVEL
 #include <list>
@@ -77,6 +85,18 @@ using namespace xia;
 #define CACHE_PORT      3
 #define XHCP_PORT       4
 
+// Verbosity Bitmask definitions, directly from tcpspeaker code
+#define VERB_NONE       0
+#define VERB_ALL        0xffffffff
+#define VERB_ERRORS     0x01
+#define VERB_WARNINGS   0x02
+#define VERB_INFO       0x04
+#define VERB_DEBUG      0x08
+#define VERB_MFD_QUEUES 0x10 // for the MFD Handler Queues
+#define VERB_PACKETS    0x20 // triggered on packet handling/traversal events
+#define VERB_DISPATCH   0x40 // for anything related to interconnecting handlers
+#define VERB_MFH_STATE  0x80 // for the 5-state statemachine of MFH
+
 CLICK_DECLS
 
 /**
@@ -94,6 +114,7 @@ Might need other things to handle chunking
 */
 
 class XIAContentModule;
+class XTRANSPORT;
 
 typedef struct {
     bool forever;
@@ -101,13 +122,32 @@ typedef struct {
     HashTable<unsigned short, unsigned int> events;
 } PollEvent;
 
+#ifndef TCP_GLOBALS
+#define TCP_GLOBALS
+struct tcp_globals 
+{ 
+        int     tcp_keepidle; 
+        int     tcp_keepintvl; 
+        int     tcp_maxidle; 
+        int     tcp_mssdflt; 
+        int     tcp_rttdflt; 
+        int     so_flags;
+        int     so_idletime; 
+        int     window_scale; 
+        bool    use_timestamp; 
+        uint32_t tcp_now;
+        tcp_seq_t so_recv_buffer_size; 
+};
+#endif
+
+
 enum HandlerState { CREATE, INITIALIZE, ACTIVE, SHUTDOWN, CLOSE };
 class XGenericTransport {
 public:
     friend class XTRANSPORT;
-    XGenericTransport (XTRANSPORT *transport, const unsigned short port, int type);
+    XGenericTransport (XTRANSPORT *transport, unsigned short port, int type);
 
-    virtual void push(const int port, Packet *p) = 0 ;
+    virtual void push(WritablePacket *p) = 0 ;
     virtual Packet *pull(const int port) = 0;
     int read_from_recv_buf(XSocketMsg *xia_socket_msg);
     virtual ~XGenericTransport();
@@ -138,14 +178,13 @@ public:
     void decrease_polling() {polling--;}
     bool is_recv_pending() {return recv_pending;}
     void set_recv_pending(bool r) {recv_pending = r;}
-    XSocketMsg get_pending_recv_msg() {return pending_recv_msg;}
     void set_pending_recv_msg(XSocketMsg *msg) {pending_recv_msg = msg;}
     XIDpair get_key() {return key;}
     void set_key(XIDpair k) {key = k;}
+
+
+    XTRANSPORT *get_transport() { return transport; }
 protected:
-
-    XTRANSPORT *get_transport() const { return transport; }
-
     unsigned short port;
     XTRANSPORT *transport;
     HandlerState state;
@@ -235,9 +274,9 @@ private:
 
 public:
     void copy_common(struct sock *sk, XIAHeader &xiahdr, XIAHeaderEncap &xiah);
-    WritablePacket* copy_packet(Packet *, struct sock *);
-    WritablePacket* copy_cid_req_packet(Packet *, struct sock *);
-    WritablePacket* copy_cid_response_packet(Packet *, struct sock *);
+    // WritablePacket* copy_packet(Packet *, struct sock *);
+    // WritablePacket* copy_cid_req_packet(Packet *, struct sock *);
+    // WritablePacket* copy_cid_response_packet(Packet *, struct sock *);
 
     char *random_xid(const char *type, char *buf);
 
@@ -288,7 +327,7 @@ public:
     void XputChunk(unsigned short _sport, XSocketMsg *xia_socket_msg);
     void Xpoll(unsigned short _sport, XSocketMsg *xia_socket_msg);
 
-private:
+
 
     /* Newly added fields and functions */
 
@@ -312,7 +351,6 @@ private:
     static String read_verb(Element*, void*);
     static int write_verb(const String&, Element*, void*, ErrorHandler*);
     static String read_num_connections(Element*, void*);
-
     ErrorHandler    *_errh;
     tcpstat         _tcpstat;
     Timer           *_fast_ticks;
@@ -320,12 +358,11 @@ private:
     int         _verbosity;
 
     tcp_globals     _tcp_globals;
-    int verbosity;
 };
 
 XGenericTransport::XGenericTransport(
     XTRANSPORT *transport,
-    const unsigned short port,
+    unsigned short port,
     int type) : state(CREATE) {
     port = port;
     transport = transport;

@@ -8,8 +8,9 @@
 #include <click/vector.hh>
 
 #include <click/xiacontentheader.hh>
-#include "xtransport.hh"
 #include "xdatagram.hh"
+#include "xtransport.hh"
+
 #include <click/xiatransportheader.hh>
 
 
@@ -25,7 +26,7 @@ XDatagram::push(WritablePacket *p_in) {
 		add_packet_to_recv_buf(p_in);
 		if (polling) {
 			// tell API we are readable
-			ProcessPollEvent(port, POLLIN);
+			get_transport()->ProcessPollEvent(port, POLLIN);
 		}
 		check_for_and_handle_pending_recv();
 	}
@@ -50,7 +51,7 @@ void
 XDatagram::check_for_and_handle_pending_recv() {
 	if (recv_pending) {
 		int bytes_returned = read_from_recv_buf(pending_recv_msg);
-		ReturnResult(port, pending_recv_msg, bytes_returned);
+		get_transport()->ReturnResult(port, pending_recv_msg, bytes_returned);
 
 		recv_pending = false;
 		delete pending_recv_msg;

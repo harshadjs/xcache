@@ -19,7 +19,8 @@
  * currently an Internet-Draft.
  */
 
-typedef	uint32_t tcp_seq_t;
+typedef uint32_t tcp_seq_t;
+typedef	uint32_t tcp_seq;
 
 struct click_tcp {
     uint16_t	th_sport;		/* 0-1   source port		     */
@@ -59,20 +60,56 @@ struct click_tcp {
 #define SEQ_GT(x,y)	((int)((x)-(y)) > 0)
 #define SEQ_GEQ(x,y)	((int)((x)-(y)) >= 0)
 
+
+// From BSD4.4 tcp.h
 /*
  * TCP options
  */
 
-#define TCPOPT_EOL		0
-#define TCPOPT_NOP		1
-#define TCPOPT_MAXSEG		2
-#define TCPOLEN_MAXSEG		4
-#define TCPOPT_WSCALE		3
-#define TCPOLEN_WSCALE		3
-#define TCPOPT_SACK_PERMITTED	4
-#define TCPOLEN_SACK_PERMITTED	2
-#define TCPOPT_SACK		5
-#define TCPOPT_TIMESTAMP	8
-#define TCPOLEN_TIMESTAMP	10
+#define TCPOPT_EOL      0
+#define TCPOPT_NOP      1
+#define TCPOPT_MAXSEG       2
+#define TCPOLEN_MAXSEG      4
+#define TCPOPT_WSCALE       3
+#define TCPOLEN_WSCALE      3
+#define TCPOPT_SACK_PERMITTED   4
+#define TCPOLEN_SACK_PERMITTED  2
+#define TCPOPT_SACK     5
+#define TCPOPT_TIMESTAMP    8
+#define TCPOLEN_TIMESTAMP   10
+ 
+#define TCPOPT_EOL      0
+#define TCPOPT_NOP      1
+#define TCPOPT_MAXSEG       2
+#define    TCPOLEN_MAXSEG       4
+#define TCPOPT_WINDOW       3
+#define    TCPOLEN_WINDOW       3
+#define TCPOPT_SACK_PERMITTED   4       /* Experimental */
+#define    TCPOLEN_SACK_PERMITTED   2
+#define TCPOPT_SACK     5       /* Experimental */
+#define TCPOPT_TIMESTAMP    8
+#define    TCPOLEN_TIMESTAMP        10
+#define    TCPOLEN_TSTAMP_APPA      (TCPOLEN_TIMESTAMP+2) /* appendix A */
+
+#define TCPOPT_TSTAMP_HDR   \
+    (TCPOPT_NOP<<24|TCPOPT_NOP<<16|TCPOPT_TIMESTAMP<<8|TCPOLEN_TIMESTAMP)
+
+/*
+ * Default maximum segment size for TCP.
+ * With an IP MSS of 576, this is 536,
+ * but 512 is probably more convenient.
+ * This should be defined as MIN(512, IP_MSS - sizeof (struct tcpiphdr)).
+ */
+#define TCP_MSS 512
+
+#define TCP_MAXWIN  65535   /* largest value for (unscaled) window */
+
+#define TCP_MAX_WINSHIFT    14  /* maximum window shift */
+
+/*
+ * User-settable options (used with setsockopt).
+ */
+#define TCP_NODELAY 0x01    /* don't delay send to coalesce packets */
+#define TCP_MAXSEG  0x02    /* set maximum segment size */
 
 #endif

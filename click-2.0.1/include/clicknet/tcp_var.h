@@ -37,6 +37,7 @@
  * Kernel variables for tcp.
  */
 
+#define TCP_REXMT_THRESH 3
 /*
  * Tcp control block, one per tcp; fields:
  */
@@ -113,7 +114,7 @@ struct tcpcb {
 	char	t_iobc;			/* input character */
 #define	TCPOOB_HAVEDATA	0x01
 #define	TCPOOB_HADDATA	0x02
-	short	t_softerror;		/* possible error not yet reported */
+	short	t_soerror;		/* possible error not yet reported */
 
 /* RFC 1323 variables */
 	u_char	snd_scale;		/* window scaling for send window */
