@@ -14,7 +14,10 @@
 
 CLICK_DECLS
 
-
+void
+XChunk::push(Packet *_p) {
+	
+}
 CLICK_ENDDECLS
 
 EXPORT_ELEMENT(XChunk)

@@ -23,8 +23,8 @@
 // #define TCPTIMERS
 #include "clicknet/tcp_timer.h"
 #include "clicknet/tcp_var.h"
-
-
+#include "xstream.hh"
+#include "xdatagram.hh"
 #if CLICK_USERLEVEL
 #include <list>
 #include <stdio.h>
@@ -92,6 +92,7 @@ using namespace xia;
 #define VERB_WARNINGS   0x02
 #define VERB_INFO       0x04
 #define VERB_DEBUG      0x08
+#define VERB_TIMERS      0x09
 #define VERB_MFD_QUEUES 0x10 // for the MFD Handler Queues
 #define VERB_PACKETS    0x20 // triggered on packet handling/traversal events
 #define VERB_DISPATCH   0x40 // for anything related to interconnecting handlers
@@ -247,7 +248,7 @@ private:
     XIAPath _nameserver_addr;
 
     Packet* UDPIPPrep(Packet *, int);
-
+    void run_timer(Timer*);
     /* Legacy fields, to be modified later */
     list<int> xcmp_listeners;   // list of ports wanting xcmp notifications
 
@@ -273,10 +274,10 @@ private:
     }
 
 public:
-    void copy_common(struct sock *sk, XIAHeader &xiahdr, XIAHeaderEncap &xiah);
-    // WritablePacket* copy_packet(Packet *, struct sock *);
-    // WritablePacket* copy_cid_req_packet(Packet *, struct sock *);
-    // WritablePacket* copy_cid_response_packet(Packet *, struct sock *);
+    void copy_common(XStream *, XIAHeader &xiahdr, XIAHeaderEncap &xiah);
+    WritablePacket* copy_packet(Packet *, XStream *);
+    WritablePacket* copy_cid_req_packet(Packet *, XStream *);
+    WritablePacket* copy_cid_response_packet(Packet *, XStream *);
 
     char *random_xid(const char *type, char *buf);
 
@@ -320,11 +321,11 @@ public:
     void Xsendto(unsigned short _sport, XSocketMsg *xia_socket_msg, WritablePacket *p_in);
     void Xrecv(unsigned short _sport, XSocketMsg *xia_socket_msg);
     void Xrecvfrom(unsigned short _sport, XSocketMsg *xia_socket_msg);
-    void XrequestChunk(unsigned short _sport, XSocketMsg *xia_socket_msg, WritablePacket *p_in);
-    void XgetChunkStatus(unsigned short _sport, XSocketMsg *xia_socket_msg);
-    void XreadChunk(unsigned short _sport, XSocketMsg *xia_socket_msg);
-    void XremoveChunk(unsigned short _sport, XSocketMsg *xia_socket_msg);
-    void XputChunk(unsigned short _sport, XSocketMsg *xia_socket_msg);
+    // void XrequestChunk(unsigned short _sport, XSocketMsg *xia_socket_msg, WritablePacket *p_in);
+    // void XgetChunkStatus(unsigned short _sport, XSocketMsg *xia_socket_msg);
+    // void XreadChunk(unsigned short _sport, XSocketMsg *xia_socket_msg);
+    // void XremoveChunk(unsigned short _sport, XSocketMsg *xia_socket_msg);
+    // void XputChunk(unsigned short _sport, XSocketMsg *xia_socket_msg);
     void Xpoll(unsigned short _sport, XSocketMsg *xia_socket_msg);
 
 

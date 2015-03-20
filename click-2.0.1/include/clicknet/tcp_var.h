@@ -38,6 +38,9 @@
  */
 
 #define TCP_REXMT_THRESH 3
+
+#define SO_FIN_AFTER_TCP_IDLE -15441
+#define SO_PLAIN_UDP -15744
 /*
  * Tcp control block, one per tcp; fields:
  */
@@ -62,7 +65,8 @@ struct tcpcb {
 #define	TF_REQ_TSTMP	0x0080		/* have/will request timestamps */
 #define	TF_RCVD_TSTMP	0x0100		/* a timestamp was received in SYN */
 #define	TF_SACK_PERMIT	0x0200		/* other side said I could SACK */
-
+	short so_flags;
+	u_short so_error;
 	struct	tcpiphdr *t_template;	/* skeletal packet for transmit */
 	struct	inpcb *t_inpcb;		/* back pointer to internet pcb */
 /*

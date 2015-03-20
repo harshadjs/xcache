@@ -80,6 +80,7 @@ public:
 private:
 
 	void push(WritablePacket *p_in);
+	Packet *pull(const int port);
 	bool should_buffer_received_packet(WritablePacket *p);
 	void add_packet_to_recv_buf(WritablePacket *p);
 	void check_for_and_handle_pending_recv();

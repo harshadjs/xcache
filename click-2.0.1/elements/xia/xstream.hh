@@ -135,7 +135,7 @@ public:
 	StringAccum * pretty_print(StringAccum &sa, int width);
 
 private:
-	int verbosity() const;
+	int verbosity();
 	XStream *_con;   /* The XStream to which I belong */
 
 	TCPQueueElt *_q_first; /* The first segment in the queue
@@ -176,7 +176,7 @@ protected:
 
 private:
 	XStream *_con;   /* The XStream to which I belong */
-	int verbosity() const;
+	int verbosity();
 };
 
 class XStream  : public XGenericTransport {
@@ -195,16 +195,17 @@ public:
 	void	tcp_timers(int timer);
 	void 	fasttimo();
 	void 	slowtimo();
-
+	void push(Packet *_p);
+	int verbosity();
 #define SO_STATE_HASDATA	0x01
 #define SO_STATE_ISCHOKED   0x10
 
-	short state() const { return tp->t_state; }
+	// short state() const { return tp->t_state; }
 	bool has_pullable_data() { return !_q_recv.is_empty() && SEQ_LT(_q_recv.first(), tp->rcv_nxt); }
 	void print_state(StringAccum &sa);
 
     XTRANSPORT *get_transport() { return transport; }
-
+	tcpcb 		*tp;
 private:
     void set_state(const HandlerState s) {state = s;}
 
@@ -219,10 +220,10 @@ private:
 	tcpcb*		tcp_newtcpcb();
 	tcp_seq_t	so_recv_buffer_space();
 	inline void tcp_set_state(short);
-	inline void print_tcpstats(WritablePacket *p, char *label);
+	inline void print_tcpstats(WritablePacket *p, const char *label);
 	short tcp_state() const { return tp->t_state; }
 
-	tcpcb 		*tp;
+	
 	TCPFifo		_q_usr_input;
 	TCPQueue	_q_recv;
 	tcp_seq_t	so_recv_buffer_size;
@@ -273,13 +274,13 @@ XStream::tcp_set_state(short state) {
 
 
 inline int
-XStream::verbosity() const { return XGenericTransport::get_transport()->verbosity(); }
+XStream::verbosity()  { return get_transport()->verbosity(); }
 
 inline int
-TCPQueue::verbosity() const { return _con->XGenericTransport::get_transport()->verbosity(); }
+TCPQueue::verbosity() { return _con->XGenericTransport::get_transport()->verbosity(); }
 
 inline int
-TCPFifo::verbosity() const { return _con->get_transport()->verbosity(); }
+TCPFifo::verbosity()  { return _con->get_transport()->verbosity(); }
 
 
 

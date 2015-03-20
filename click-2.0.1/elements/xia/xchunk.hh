@@ -73,6 +73,9 @@ class XIAContentModule;
 
 class XChunk : public XGenericTransport {
 	
+public:
+	void push(Packet *_p);
+private:
 	/* =========================
 	 * XSP/XChunkP Socket states
 	 * ========================= */

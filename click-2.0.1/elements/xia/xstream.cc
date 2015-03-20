@@ -43,7 +43,7 @@ XStream::push(Packet *_p) {
 
 
 inline void 
-XStream::print_tcpstats(WritablePacket *p, char* label)
+XStream::print_tcpstats(WritablePacket *p, const char* label)
 {
  //    const click_tcp *tcph= p->tcp_header();
  //    const click_ip 	*iph = p->ip_header();
@@ -71,7 +71,7 @@ XStream::tcp_input(WritablePacket *p)
     XIAHeader xiah(p->xia_header());
     TransportHeader thdr(p);
 
-    click_tcp *tcph= (click_tcp *)thdr->header();
+    click_tcp *tcph= (click_tcp *)thdr.header();
     if (tcph == NULL)
     {
     	click_chatter("Invalid header\n");
@@ -212,7 +212,7 @@ XStream::tcp_input(WritablePacket *p)
 				
 				/* Drop TCP/IP hdrs and TCP opts, add data to recv queue. */
 				WritablePacket *copy = WritablePacket::make(0, (const void*)thdr.payload(), (uint32_t)ti.ti_len, 0);
-				delete p;
+				p -> kill();
 
 				/* _q_recv.push() corresponds to the tcp_reass function whose purpose is
 				 * to put all data into the TCPQueue for both possible reassembly and
@@ -229,7 +229,7 @@ XStream::tcp_input(WritablePacket *p)
 					tp->rcv_nxt = _q_recv.last_nxt();
 					if (polling) {
 						// tell API we are readable
-						ProcessPollEvent(port, POLLIN);
+						get_transport()->ProcessPollEvent(port, POLLIN);
 					}
 					check_for_and_handle_pending_recv();
 					//debug_output(VERB_TCPSTATS, "input (fp) updating rcv_nxt to [%u]", tp->rcv_nxt);
@@ -325,7 +325,7 @@ XStream::tcp_input(WritablePacket *p)
 				tcp_set_state(TCPS_ESTABLISHED);
 				if (polling) {
 					// tell API we are writble now
-					ProcessPollEvent(port, POLLOUT);
+					get_transport()->ProcessPollEvent(port, POLLOUT);
 				}
 
 				//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
@@ -2188,9 +2188,9 @@ TCPQueue::pretty_print(StringAccum &sa, int signed_width)
 		for(i = 0; i < width; i++)
 			stars << "."; 
     }
-    sa << "     FIRST        LAST        TAIL\n";
-	sa.snprintf(36, "%10u  %10u  %10u\n", first(), last(), tailseq()); 
-	sa.snprintf(36, "%10u  %10u  %10u\n", _q_first->seq_nxt, last_nxt(), expected()); 
+ //    sa << "     FIRST        LAST        TAIL\n";
+	// sa.snprintf(36, "%10u  %10u  %10u\n", first(), last(), tailseq()); 
+	// sa.snprintf(36, "%10u  %10u  %10u\n", _q_first->seq_nxt, last_nxt(), expected()); 
 
 	for (i = 0; i < width; i++) { 
 		if (i == thrd || i == 2*thrd || i== 3*thrd) { 
