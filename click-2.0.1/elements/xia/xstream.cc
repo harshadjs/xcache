@@ -93,7 +93,8 @@ XStream::tcp_input(WritablePacket *p)
 
     if (off < sizeof(click_tcp)) {
 		get_transport()->_tcpstat.tcps_rcvbadoff++; 
-		goto drop;
+	    p->kill();
+		return;
     }
     // ti.ti_len -= sizeof(click_tcp) + off; 
 
@@ -725,7 +726,7 @@ XStream::tcp_input(WritablePacket *p)
 					tp->rcv_nxt = _q_recv.last_nxt();
 					if (polling) {
 						// tell API we are readable
-						ProcessPollEvent(port, POLLIN);
+						get_transport()->ProcessPollEvent(port, POLLIN);
 					}
 					check_for_and_handle_pending_recv();
 					//debug_output(VERB_TCPSTATS, "input (closing) updating rcv_nxt to [%u]", tp->rcv_nxt);
@@ -814,7 +815,7 @@ dodata:
 			tp->rcv_nxt = _q_recv.last_nxt();
 			if (polling) {
 				// tell API we are readable
-				ProcessPollEvent(port, POLLIN);
+				get_transport()->ProcessPollEvent(port, POLLIN);
 			}
 			check_for_and_handle_pending_recv();
 			//debug_output(VERB_TCPSTATS, "input (sp) updating rcv_nxt to [%u]", tp->rcv_nxt);
@@ -1184,7 +1185,7 @@ send:
 	XIAHeaderEncap xiah;
 	xiah.set_nxt(CLICK_XIA_NXT_TRN);
 	xiah.set_last(LAST_NODE_DEFAULT);
-	xiah.set_hlim(hlim.get(port));
+	xiah.set_hlim(hlim);
 	xiah.set_dst_path(dst_path);
 	xiah.set_src_path(src_path);
 
@@ -1224,10 +1225,10 @@ XStream::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 
 	if (! (flags & TH_RST)) {
 	    flags = TH_ACK; 
-	    th->th_win = htons((u_short)(win >> tp->rcv_scale)); 
+	    th.th_win = htons((u_short)(win >> tp->rcv_scale)); 
 		
 	} else { 
-	    th->th_win = htons((u_short)win); 
+	    th.th_win = htons((u_short)win); 
 	}
 	
 /*	setports(th->th_sport, _con_id._ports); */
@@ -1245,9 +1246,9 @@ XStream::tcp_respond(tcp_seq_t ack, tcp_seq_t seq, int flags)
 	XIAHeaderEncap xiah_new;
 	xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
 	xiah_new.set_last(LAST_NODE_DEFAULT);
-	xiah_new.set_hlim(hlim.get(port));
-	xiah_new.set_dst_path(dst_path());
-	xiah_new.set_src_path(src_path());
+	xiah_new.set_hlim(hlim);
+	xiah_new.set_dst_path(get_dst_path());
+	xiah_new.set_src_path(get_src_path());
 	TransportHeaderEncap *tcph = TransportHeaderEncap::MakeTCPHeader(&th);
 	p = tcph -> encap(NULL);
 	tcph -> update();
@@ -1334,7 +1335,7 @@ XStream::tcp_timers (int timer) {
 
 			if (polling) {
 				printf("checking poll event for %d from timer\n", port);
-				ProcessPollEvent(port, POLLHUP);
+				get_transport()->ProcessPollEvent(port, POLLHUP);
 			}
 
 		    goto dropit; 
@@ -1484,7 +1485,7 @@ XStream::tcp_xmit_timer(short rtt) {
 	 * for now (a route might have failed after we sent a segment,
 	 * and the return path might not be symmetrical).
 	 */
-	tp->t_softerror = 0;
+	// tp->t_softerror = 0;
 }
 
 void
@@ -1776,7 +1777,7 @@ XStream::print_state(StringAccum &sa)
 */
 void XStream::check_for_and_handle_pending_recv() {
 	if (recv_pending) {
-		int bytes_returned = read_from_recv_buf(tcp_conn->pending_recv_msg);
+		int bytes_returned = read_from_recv_buf(pending_recv_msg);
 		get_transport()->ReturnResult(port, pending_recv_msg, bytes_returned);
 		recv_pending = false;
 		delete pending_recv_msg;
@@ -1849,8 +1850,6 @@ XStream::tcp_newtcpcb()
 
 	tp->rcv_wnd = so_recv_buffer_space();
 
-	tp->tcp_out_hdr_len = sizeof(click_tcp); 
-	tp->ip_out_hdr_len = sizeof(click_ip);
 	tp->so_flags = get_transport()->globals()->so_flags; 
 	if (get_transport()->globals()->window_scale) { 
 		tp->t_flags &= TF_REQ_SCALE; 
@@ -1921,7 +1920,7 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 {
     TCPQueueElt *qe = NULL ; 
     TCPQueueElt *wrk = NULL ; 
-    StringAccum sa;
+    // StringAccum sa;
 
 	////debug_output(VERB_TCPQUEUE, "TCPQueue:push pkt:%ubytes, seq:%ubytes", p->length(), seq_nxt-seq); 
 	
@@ -1976,7 +1975,7 @@ TCPQueue::push(WritablePacket * p, tcp_seq_t seq, tcp_seq_t seq_nxt)
 			loop_last();
 
 		//debug_output(VERB_TCPQUEUE, "[%s] TCPQueue::push (%s)", _con->SPKRNAME,
-			perfect?"perfect tail":"tail"); 
+			// perfect?"perfect tail":"tail"); 
 		//debug_output(VERB_TCPQUEUE, "%s", pretty_print(sa, 60)->c_str()); 
 		return 0; 
 	}
@@ -2155,18 +2154,18 @@ TCPQueue::pretty_print(StringAccum &sa, int signed_width)
 	uint32_t i = 0; 
 	uint32_t width = (unsigned int) signed_width; 
 	TCPQueueElt * wp; 
-	StringAccum stars; 
+	// StringAccum stars; 
 	uint32_t thrd = width/3;
 
 	if (width < 46) { 
-		sa << "Too narrow for prettyprinting"; 
-		return &sa; 
+		// sa << "Too narrow for prettyprinting"; 
+		// return &sa; 
 	}
 	if (_q_first) { 
 		wp = _q_first;  
 		for (i = 0; i < width; i++) { 
 			if (!wp) {
-				stars << "."; 
+				// stars << "."; 
 				continue;
 			}
 			if (wp == _q_first)
@@ -2176,17 +2175,17 @@ TCPQueue::pretty_print(StringAccum &sa, int signed_width)
 			if (wp == _q_last)
 				tail = i; 
 			if (wp->nxt && (wp->seq_nxt != wp->nxt->seq) ) { 
-				stars << "*_"; 
+				// stars << "*_"; 
 				i++; 
 			} else { 
-				stars << "*"; 
+				// stars << "*"; 
 			}
 			wp = wp->nxt; 
 		}
     } else { 
 		head = exp = tail = 0; 
-		for(i = 0; i < width; i++)
-			stars << "."; 
+		// for(i = 0; i < width; i++)
+			// stars << "."; 
     }
  //    sa << "     FIRST        LAST        TAIL\n";
 	// sa.snprintf(36, "%10u  %10u  %10u\n", first(), last(), tailseq()); 
@@ -2194,27 +2193,28 @@ TCPQueue::pretty_print(StringAccum &sa, int signed_width)
 
 	for (i = 0; i < width; i++) { 
 		if (i == thrd || i == 2*thrd || i== 3*thrd) { 
-			sa << "|"; 
+			// sa << "|"; 
 			continue;
 		}
 		if (((i < thrd && i >= head) || (i > thrd && i <= head)) ||
 			((i < 2 * thrd && i >= exp) || (i > 2 * thrd && i <= exp)) ||
 			((i < 3 * thrd  && i >= tail) || (i > 3 * thrd && i <= tail))) {
-			sa << "_"; 
+			// sa << "_"; 
 			continue;
 		}
-		sa << " "; 
+		// sa << " "; 
     }
-    sa << "\n"; 
-	for (i = 0; i < width; i++ ) {
-		if (i == tail || i == exp || i == tail) 
-			sa << "|"; 
-		else
-			sa << " "; 
-    }
-    sa << "\n" << stars; 
+    // sa << "\n"; 
+	// for (i = 0; i < width; i++ ) {
+	// 	if (i == tail || i == exp || i == tail) 
+	// 		// sa << "|"; 
+	// 	else
+	// 		// sa << " "; 
+ //    }
+    // sa << "\n" << stars; 
 
-	return &sa;
+	// return &sa;
+	return NULL;
 }
 
 
@@ -2346,8 +2346,8 @@ TCPFifo::drop_until(tcp_seq_t offset)
 
 CLICK_ENDDECLS
 
-EXPORT_ELEMENT(TCPQueue)
-EXPORT_ELEMENT(TCPFifo)
-EXPORT_ELEMENT(XStream)
-ELEMENT_REQUIRES(userlevel)
-ELEMENT_REQUIRES(XIAContentModule)
+// EXPORT_ELEMENT(TCPQueue)
+// EXPORT_ELEMENT(TCPFifo)
+// EXPORT_ELEMENT(XStream)
+// ELEMENT_REQUIRES(userlevel)
+// ELEMENT_REQUIRES(XIAContentModule)

@@ -16,7 +16,7 @@
 
 CLICK_DECLS
 
-XDatagram::XDatagram(XTRANSPORT *transport, const unsigned short port)
+XDatagram::XDatagram(XTRANSPORT *transport, unsigned short port)
 	: XGenericTransport(transport, port, XSOCKET_DGRAM) {}
 
 void
@@ -92,6 +92,6 @@ XDatagram::read_from_recv_buf(XSocketMsg *xia_socket_msg) {
 
 CLICK_ENDDECLS
 
-EXPORT_ELEMENT(XDatagram)
-ELEMENT_REQUIRES(userlevel)
-ELEMENT_REQUIRES(XIAContentModule)
+// EXPORT_ELEMENT(XDatagram)
+// ELEMENT_REQUIRES(userlevel)
+// ELEMENT_REQUIRES(XIAContentModule)

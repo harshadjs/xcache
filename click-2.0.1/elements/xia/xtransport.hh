@@ -23,8 +23,7 @@
 // #define TCPTIMERS
 #include "clicknet/tcp_timer.h"
 #include "clicknet/tcp_var.h"
-#include "xstream.hh"
-#include "xdatagram.hh"
+
 #if CLICK_USERLEVEL
 #include <list>
 #include <stdio.h>
@@ -115,6 +114,7 @@ Might need other things to handle chunking
 */
 
 class XIAContentModule;
+// class XStream;
 class XTRANSPORT;
 
 typedef struct {
@@ -147,9 +147,10 @@ class XGenericTransport {
 public:
     friend class XTRANSPORT;
     XGenericTransport (XTRANSPORT *transport, unsigned short port, int type);
-
-    virtual void push(WritablePacket *p) = 0 ;
-    virtual Packet *pull(const int port) = 0;
+    XGenericTransport() { };
+    const char *class_name() const      { return "GENERIC_TRANSPORT"; }
+    void push(WritablePacket *p);;
+    // virtual Packet *pull(const int port) = 0;
     int read_from_recv_buf(XSocketMsg *xia_socket_msg);
     virtual ~XGenericTransport();
     const unsigned short get_port() {return port;}
@@ -210,7 +211,7 @@ protected:
     ErrorHandler    *_errh;
 
 private:
-    XGenericTransport() { };
+    
 };
 
 typedef HashTable<XIDpair, XGenericTransport*>::iterator ConnIterator; 
@@ -274,10 +275,10 @@ private:
     }
 
 public:
-    void copy_common(XStream *, XIAHeader &xiahdr, XIAHeaderEncap &xiah);
-    WritablePacket* copy_packet(Packet *, XStream *);
-    WritablePacket* copy_cid_req_packet(Packet *, XStream *);
-    WritablePacket* copy_cid_response_packet(Packet *, XStream *);
+    void copy_common(XGenericTransport *handler, XIAHeader &xiahdr, XIAHeaderEncap &xiah);
+    WritablePacket* copy_packet(Packet *p, XGenericTransport *handler);
+    WritablePacket* copy_cid_req_packet(Packet *p, XGenericTransport *handler);
+    WritablePacket* copy_cid_response_packet(Packet *p, XGenericTransport *handler);
 
     char *random_xid(const char *type, char *buf);
 

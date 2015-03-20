@@ -14,12 +14,16 @@
 
 CLICK_DECLS
 
-void
-XChunk::push(Packet *_p) {
+XChunk::XChunk(XTRANSPORT *transport, unsigned short port)
+	: XGenericTransport(transport, port, XSOCKET_CHUNK) {}
+
+void XChunk::push(Packet *_p) {
 	
 }
+
+
 CLICK_ENDDECLS
 
-EXPORT_ELEMENT(XChunk)
-ELEMENT_REQUIRES(userlevel)
-ELEMENT_REQUIRES(XIAContentModule)
+// EXPORT_ELEMENT(XChunk)
+// ELEMENT_REQUIRES(userlevel)
+// ELEMENT_REQUIRES(XIAContentModule)

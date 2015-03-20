@@ -43,21 +43,6 @@ using namespace std;
 
 #define UNUSED(x) ((void)(x))
 
-#define ACK_DELAY			300
-#define TEARDOWN_DELAY		240000
-#define HLIM_DEFAULT		250
-#define LAST_NODE_DEFAULT	-1
-#define RANDOM_XID_FMT		"%s:30000ff0000000000000000000000000%08x"
-#define UDP_HEADER_SIZE		8
-
-// TODO: switch these to bytes, not packets?
-#define MAX_SEND_WIN_SIZE 256  // in packets, not bytes
-#define MAX_RECV_WIN_SIZE 256
-#define DEFAULT_SEND_WIN_SIZE 128
-#define DEFAULT_RECV_WIN_SIZE 128
-
-#define MAX_CONNECT_TRIES	 30
-#define MAX_RETRANSMIT_TRIES 100
 
 #define REQUEST_FAILED		0x00000001
 #define WAITING_FOR_CHUNK	0x00000002
@@ -75,6 +60,9 @@ class XChunk : public XGenericTransport {
 	
 public:
 	void push(Packet *_p);
+	XChunk(XTRANSPORT *transport, unsigned short port);
+	XChunk();
+	~XChunk();
 private:
 	/* =========================
 	 * XSP/XChunkP Socket states
@@ -93,8 +81,8 @@ private:
 		int num_connect_tries; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
 		int num_retransmit_tries; // number of times to try resending data packets
 
-    	queue<sock*> pending_connection_buf;
-		queue<xia::XSocketMsg*> pendingAccepts; // stores accept messages from API when there are no pending connections
+  //   	queue<sock*> pending_connection_buf;
+		// queue<xia::XSocketMsg*> pendingAccepts; // stores accept messages from API when there are no pending connections
 	
 		// send buffer
     	WritablePacket *send_buffer[MAX_SEND_WIN_SIZE]; // packets we've sent but have not gotten an ACK for // TODO: start smaller, dynamically resize if app asks for more space (up to MAX)?

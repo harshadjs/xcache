@@ -43,29 +43,6 @@ using namespace xia;
 
 #define UNUSED(x) ((void)(x))
 
-#define ACK_DELAY			300
-#define TEARDOWN_DELAY		240000
-#define HLIM_DEFAULT		250
-#define LAST_NODE_DEFAULT	-1
-#define RANDOM_XID_FMT		"%s:30000ff0000000000000000000000000%08x"
-#define UDP_HEADER_SIZE		8
-
-#define XSOCKET_INVALID -1	// invalid socket type	
-#define XSOCKET_STREAM	1	// Reliable transport (SID)
-#define XSOCKET_DGRAM	2	// Unreliable transport (SID)
-#define XSOCKET_RAW		3	// Raw XIA socket
-#define XSOCKET_CHUNK	4	// Content Chunk transport (CID)
-
-// TODO: switch these to bytes, not packets?
-#define MAX_SEND_WIN_SIZE 256  // in packets, not bytes
-#define MAX_RECV_WIN_SIZE 256
-#define DEFAULT_SEND_WIN_SIZE 128
-#define DEFAULT_RECV_WIN_SIZE 128
-
-#define MAX_CONNECT_TRIES	 30
-#define MAX_RETRANSMIT_TRIES 100
-
-
 CLICK_DECLS
 
 
@@ -75,12 +52,12 @@ class XDatagram : public XGenericTransport {
 
 public:
 	XDatagram(XTRANSPORT *transport, unsigned short port);
+	XDatagram();
 	~XDatagram() {};
 	int read_from_recv_buf(XSocketMsg *xia_socket_msg);
 private:
 
 	void push(WritablePacket *p_in);
-	Packet *pull(const int port);
 	bool should_buffer_received_packet(WritablePacket *p);
 	void add_packet_to_recv_buf(WritablePacket *p);
 	void check_for_and_handle_pending_recv();

@@ -54,6 +54,11 @@ using namespace xia;
 
 #define NETWORK_PORT    2
 
+#define MAX_TCPOPTLEN 40
+
+#define TCP_REXMTVAL(tp) \
+	(((tp)->t_srtt >> TCP_RTT_SHIFT) + (tp)->t_rttvar)
+
 /*
  * (BSD)
  * Flags used when sending segments in tcp_output.  Basic flags (TH_RST,
@@ -89,7 +94,6 @@ struct mini_tcpip
 
 CLICK_DECLS
 
-class XIAContentModule;
 class XStream;
 // Queue of packets from transport to socket layer
 class TCPQueue {
@@ -112,6 +116,7 @@ class TCPQueue {
 
 public:
 	TCPQueue(XStream *con);
+	TCPQueue();
 	~TCPQueue();
 
 	int push(WritablePacket *p, tcp_seq_t seq, tcp_seq_t seq_nxt);
@@ -155,6 +160,7 @@ class TCPFifo
 public:
 #define FIFO_SIZE 256
 	TCPFifo(XStream *con);
+	TCPFifo();
 	~TCPFifo();
 	int 	push(WritablePacket *);
 	int 	pkt_length() { return (_head - _tail) % FIFO_SIZE; }
@@ -183,6 +189,7 @@ class XStream  : public XGenericTransport {
 
 public:
 	XStream(XTRANSPORT *transport, unsigned short port);
+	XStream();
 	~XStream() {};
 	int read_from_recv_buf(XSocketMsg *xia_socket_msg);
 	void check_for_and_handle_pending_recv();
@@ -207,7 +214,7 @@ public:
     XTRANSPORT *get_transport() { return transport; }
 	tcpcb 		*tp;
 private:
-    void set_state(const HandlerState s) {state = s;}
+    void set_state(const HandlerState s);
 
 	void 		_tcp_dooptions(u_char *cp, int cnt, const click_tcp *ti,
 	                           int *ts_present, u_long *ts_val, u_long *ts_ecr);

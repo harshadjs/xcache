@@ -39,8 +39,11 @@
 
 #define TCP_REXMT_THRESH 3
 
-#define SO_FIN_AFTER_TCP_IDLE -15441
-#define SO_PLAIN_UDP -15744
+#define SO_FIN_AFTER_TCP_IDLE 1000
+#define SO_PLAIN_UDP 1001
+#define SO_FIN_AFTER_TCP_FIN 1002
+#define SO_FIN_AFTER_UDP_IDLE 1003
+#define SO_FIN_AFTER_IDLE 1004
 /*
  * Tcp control block, one per tcp; fields:
  */
