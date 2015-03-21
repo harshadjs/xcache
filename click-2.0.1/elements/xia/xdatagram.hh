@@ -52,7 +52,7 @@ class XDatagram : public XGenericTransport {
 
 public:
 	XDatagram(XTRANSPORT *transport, unsigned short port);
-	XDatagram();
+	XDatagram(){};
 	~XDatagram() {};
 	int read_from_recv_buf(XSocketMsg *xia_socket_msg);
 private:

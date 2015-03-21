@@ -17,9 +17,9 @@
 #include <elements/ipsec/sha1_impl.hh>
 #include <click/xiatransportheader.hh>
 
-#define TCPOUTFLAGS
-#define TCPSTATES
-#include "clicknet/tcp_fsm.h"
+// #define TCPOUTFLAGS
+// #define TCPSTATES
+// #include "clicknet/tcp_fsm.h"
 // #define TCPTIMERS
 #include "clicknet/tcp_timer.h"
 #include "clicknet/tcp_var.h"
@@ -143,16 +143,16 @@ struct tcp_globals
 
 
 enum HandlerState { CREATE, INITIALIZE, ACTIVE, SHUTDOWN, CLOSE };
-class XGenericTransport {
+class XGenericTransport : public Element {
 public:
     friend class XTRANSPORT;
     XGenericTransport (XTRANSPORT *transport, unsigned short port, int type);
     XGenericTransport() { };
     const char *class_name() const      { return "GENERIC_TRANSPORT"; }
-    void push(WritablePacket *p);;
+    void push(WritablePacket *p){};
     // virtual Packet *pull(const int port) = 0;
-    int read_from_recv_buf(XSocketMsg *xia_socket_msg);
-    virtual ~XGenericTransport();
+    int read_from_recv_buf(XSocketMsg *xia_socket_msg) ;
+    // virtual ~XGenericTransport();
     const unsigned short get_port() {return port;}
     int get_type() { return type; }
     void set_state(const HandlerState s) {state = s;}
@@ -362,17 +362,7 @@ public:
     tcp_globals     _tcp_globals;
 };
 
-XGenericTransport::XGenericTransport(
-    XTRANSPORT *transport,
-    unsigned short port,
-    int type) : state(CREATE) {
-    port = port;
-    transport = transport;
-    type = type;
-    _errh = transport -> error_handler();
-    hlim = HLIM_DEFAULT;
-    nxt = CLICK_XIA_NXT_TRN;
-}
+
 
 
 CLICK_ENDDECLS

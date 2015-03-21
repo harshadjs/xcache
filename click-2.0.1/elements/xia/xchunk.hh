@@ -61,8 +61,8 @@ class XChunk : public XGenericTransport {
 public:
 	void push(Packet *_p);
 	XChunk(XTRANSPORT *transport, unsigned short port);
-	XChunk();
-	~XChunk();
+	XChunk(){};
+	// ~XChunk(){}
 private:
 	/* =========================
 	 * XSP/XChunkP Socket states

@@ -24,6 +24,6 @@ void XChunk::push(Packet *_p) {
 
 CLICK_ENDDECLS
 
-// EXPORT_ELEMENT(XChunk)
-// ELEMENT_REQUIRES(userlevel)
-// ELEMENT_REQUIRES(XIAContentModule)
+EXPORT_ELEMENT(XChunk)
+ELEMENT_REQUIRES(userlevel)
+ELEMENT_REQUIRES(XIAContentModule)

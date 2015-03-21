@@ -26,6 +26,18 @@
 
 
 CLICK_DECLS
+XGenericTransport::XGenericTransport(
+    XTRANSPORT *transport,
+    unsigned short port,
+    int type) : state(CREATE) {
+    port = port;
+    transport = transport;
+    type = type;
+    _errh = transport -> error_handler();
+    hlim = HLIM_DEFAULT;
+    nxt = CLICK_XIA_NXT_TRN;
+}
+    void XTRANSPORT::ProcessCachePacket(WritablePacket *p_in){}
 
 XTRANSPORT::XTRANSPORT()
 {
@@ -1483,7 +1495,8 @@ void XTRANSPORT::Xsendto(unsigned short _sport, XSocketMsg *xia_socket_msg, Writ
 void XTRANSPORT::Xrecv(unsigned short _sport, XSocketMsg *xia_socket_msg)
 {
 	XGenericTransport *handler = portToHandler.get(_sport);
-	handler->read_from_recv_buf(xia_socket_msg);
+	// todo, cast to correct type
+	// handler->read_from_recv_buf(xia_socket_msg);
 
 	if (xia_socket_msg->x_recv().bytes_returned() > 0) {
 		// Return response to API
@@ -1507,7 +1520,8 @@ void XTRANSPORT::Xrecv(unsigned short _sport, XSocketMsg *xia_socket_msg)
 void XTRANSPORT::Xrecvfrom(unsigned short _sport, XSocketMsg *xia_socket_msg)
 {
 	XGenericTransport *handler = portToHandler.get(_sport);
-	handler->read_from_recv_buf(xia_socket_msg);
+	// todo, cast to correct type
+	// handler->read_from_recv_buf(xia_socket_msg);
 
 	if (xia_socket_msg->x_recvfrom().bytes_returned() > 0) {
 		// Return response to API
@@ -1897,7 +1911,7 @@ void XTRANSPORT::Xrecvfrom(unsigned short _sport, XSocketMsg *xia_socket_msg)
 CLICK_ENDDECLS
 
 EXPORT_ELEMENT(XTRANSPORT)
-// EXPORT_ELEMENT(XGenericTransport)
+EXPORT_ELEMENT(XGenericTransport)
 ELEMENT_REQUIRES(userlevel)
 ELEMENT_REQUIRES(XIAContentModule)
 ELEMENT_MT_SAFE(XTRANSPORT)

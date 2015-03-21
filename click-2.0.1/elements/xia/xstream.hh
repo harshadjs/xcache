@@ -17,9 +17,14 @@
 #include <click/xiatransportheader.hh>
 #include <clicknet/tcp.h>
 #include "xtransport.hh"
+#include "clicknet/tcp_fsm.h"
 
 
-
+static u_char	tcp_outflags[TCP_NSTATES] = {
+    TH_RST|TH_ACK, 0, TH_SYN, TH_SYN|TH_ACK,
+    TH_ACK, TH_ACK,
+    TH_FIN|TH_ACK, TH_FIN|TH_ACK, TH_FIN|TH_ACK, TH_ACK, TH_ACK,
+};
 #if CLICK_USERLEVEL
 #include <list>
 #include <stdio.h>
@@ -91,6 +96,7 @@ struct mini_tcpip
 	uint16_t ti_urp;
 };
 
+#define TCPOUTFLAGS
 
 CLICK_DECLS
 
@@ -116,7 +122,7 @@ class TCPQueue {
 
 public:
 	TCPQueue(XStream *con);
-	TCPQueue();
+	TCPQueue(){};
 	~TCPQueue();
 
 	int push(WritablePacket *p, tcp_seq_t seq, tcp_seq_t seq_nxt);
@@ -160,7 +166,7 @@ class TCPFifo
 public:
 #define FIFO_SIZE 256
 	TCPFifo(XStream *con);
-	TCPFifo();
+	TCPFifo(){};
 	~TCPFifo();
 	int 	push(WritablePacket *);
 	int 	pkt_length() { return (_head - _tail) % FIFO_SIZE; }
@@ -189,7 +195,7 @@ class XStream  : public XGenericTransport {
 
 public:
 	XStream(XTRANSPORT *transport, unsigned short port);
-	XStream();
+	XStream(){};
 	~XStream() {};
 	int read_from_recv_buf(XSocketMsg *xia_socket_msg);
 	void check_for_and_handle_pending_recv();
