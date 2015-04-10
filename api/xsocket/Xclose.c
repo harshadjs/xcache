@@ -36,12 +36,10 @@
 ** @returns -1 on error with errno set to a value compatible with the standard
 ** close API call.
 */
-int Xclose(int sockfd)
-{
+int Xclose(int sockfd) {
 	int rc;
 
-	if (getSocketType(sockfd) == XSOCK_INVALID)
-	{
+	if (getSocketType(sockfd) == XSOCK_INVALID) {
 		LOG("The socket is not a valid Xsocket");
 		errno = EBADF;
 		return -1;
@@ -54,8 +52,8 @@ int Xclose(int sockfd)
 
 	if ((rc = click_send(sockfd, &xsm)) < 0) {
 		LOGF("Error talking to Click: %s", strerror(errno));
-
-	} else if ((rc = click_status(sockfd, seq)) < 0) {
+	} 
+	else if ((rc = click_status(sockfd, seq)) < 0) {
 		LOGF("Error getting status from Click: %s", strerror(errno));
 	}
 

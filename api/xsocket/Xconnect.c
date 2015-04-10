@@ -25,39 +25,36 @@
 #include "Xutil.h"
 #include "dagaddr.hpp"
 
-int _connDgram(int sockfd, const sockaddr *addr, socklen_t addrlen)
-{
+int _connDgram(int sockfd, const sockaddr *addr, socklen_t addrlen) {
 	UNUSED(addrlen);
 	int rc = 0;
 
 	if (addr->sa_family == AF_UNSPEC) {
-
 		// go back to allowing connections to/from any peer
 		connectDgram(sockfd, NULL);
-
-	} else if (addr->sa_family == AF_XIA) {
+	} 
+	else if (addr->sa_family == AF_XIA) {
 		// validate addr
 		Graph g((sockaddr_x *)addr);
 
 		if (g.num_nodes() == 0) {
 			rc = -1;
 			errno = EHOSTUNREACH;
-
 		// FIXME: can we verify addrlen here?
-
-		} else {
+		} 
+		else {
 			connectDgram(sockfd, (sockaddr_x *)addr);
 		}
-	} else {
+	} 
+	else {
 		rc = -1;
 		errno = EAFNOSUPPORT;
 	}
-
 	return rc;
 }
 
-int _connStream(int sockfd, const sockaddr *addr, socklen_t addrlen)
-{
+// send XCONNECT type msg and wait for XCONNECTED type msg from click to set CONNECTED state
+int _connStream(int sockfd, const sockaddr *addr, socklen_t addrlen) {
 	UNUSED(addrlen);
 	int rc;
 
@@ -67,7 +64,6 @@ int _connStream(int sockfd, const sockaddr *addr, socklen_t addrlen)
 	}
 
 	// FIXME: check addrlen here. check against wrapper, there were problems with it not setting length correctly
-
 	Graph g((sockaddr_x*)addr);
 	if (g.num_nodes() <= 0) {
 		errno = EADDRNOTAVAIL;
@@ -85,7 +81,7 @@ int _connStream(int sockfd, const sockaddr *addr, socklen_t addrlen)
 
 	xia::XSocketMsg xsm;
 	xsm.set_type(xia::XCONNECT);
-	unsigned seq = seqNo(sockfd);
+	unsigned seq = seqNo(sockfd); // ?
 	xsm.set_sequence(seq);
 
 	xia::X_Connect_Msg *x_connect_msg = xsm.mutable_x_connect();
@@ -105,17 +101,18 @@ int _connStream(int sockfd, const sockaddr *addr, socklen_t addrlen)
 			LOGF("Error retrieving recv data from Click: %s", strerror(errno));
 			return -1;
 		}
-	} else {
+	} 
+	else {
 		// something bad happened! we shouldn't get a success code here
 	}
 
 	// Waiting for SYNACK from destination server
-    int clickrc = click_reply(sockfd, 0, &xsm);
-    if (clickrc < 0 || xsm.x_connect().status() != xia::X_Connect_Msg::XCONNECTED) {
-        setConnState(sockfd, UNCONNECTED);
-        LOGF("Xconnect failed: %s", strerror(errno));
-        return -1;
-    }
+	int clickrc = click_reply(sockfd, 0, &xsm);
+	if (clickrc < 0 || xsm.x_connect().status() != xia::X_Connect_Msg::XCONNECTED) {
+		setConnState(sockfd, UNCONNECTED);
+		LOGF("Xconnect failed: %s", strerror(errno));
+		return -1;
+	}
 
 	setConnState(sockfd, CONNECTED);
 	return 0;

@@ -325,8 +325,8 @@ class XTRANSPORT : public Element {
 	 * Socket states
 	 * ========================= */
     struct sock {
-    	sock(): port(0), isConnected(false), initialized(false), 
-							full_src_dag(false), timer_on(false), synack_waiting(false), 
+    	sock(): port(0), isConnected(0), isClosed(0), initialized(false), 
+							full_src_dag(false), timer_on(false), synack_waiting(false), synackack_waiting(false),
 							dataack_waiting(false), teardown_waiting(false), 
 							send_buffer_size(DEFAULT_SEND_WIN_SIZE), 
 							recv_buffer_size(DEFAULT_RECV_WIN_SIZE), send_base(0), 
@@ -356,10 +356,12 @@ class XTRANSPORT : public Element {
 		 * XSP/XChunkP Socket states
 		 * ========================= */
 
-			bool isConnected;
+			int isConnected; 	// chenren: change bool to int; {-1,0,1} represents pending, closed and connected
+			int	isClosed; 		// chenren: {-1,0,1} represents pending, connected and closed 
 			bool initialized;
 			bool isAcceptSocket;
 			bool synack_waiting;
+			bool synackack_waiting; // chenren: used for synack retransmission
 			bool dataack_waiting;
 			bool teardown_waiting;
 
@@ -391,7 +393,8 @@ class XTRANSPORT : public Element {
 			xia::XSocketMsg *pending_recv_msg;
 
 			//Vector<WritablePacket*> pkt_buf;
-			WritablePacket *syn_pkt;
+			WritablePacket *syn_pkt; 
+			WritablePacket *synack_pkt; // chenren: for retransmission
 			HashTable<XID, WritablePacket*> XIDtoCIDreqPkt;
 			HashTable<XID, Timestamp> XIDtoExpiryTime;
 			HashTable<XID, bool> XIDtoTimerOn;
@@ -461,9 +464,9 @@ class XTRANSPORT : public Element {
 			uint32_t	packets_out;	/* Packets which are "in flight"	*/
 			uint32_t	retrans_out;	/* Retransmitted packets out		*/
 
-			uint8_t	reordering;	/* Packet reordering metric.		*/
+			uint8_t		reordering;	/* Packet reordering metric.		*/
 
-			uint8_t	keepalive_probes; /* num of allowed keep alive probes	*/
+			uint8_t		keepalive_probes; /* num of allowed keep alive probes	*/
 
 		/*
 		 *	Slow start and congestion control (see also Nagle, and Karn & Partridge)
@@ -489,34 +492,32 @@ class XTRANSPORT : public Element {
 
 			// TODO: SACK block readded?
 
-			int     lost_cnt_hint;
-			uint32_t     retransmit_high;	/* L-bits may be on up to this seqno */
+			int						lost_cnt_hint;
+			uint32_t			retransmit_high;	/* L-bits may be on up to this seqno */
 
-			uint32_t	lost_retrans_low;	/* Sent seq after any rxmit (lowest) */
+			uint32_t			lost_retrans_low;	/* Sent seq after any rxmit (lowest) */
 
-			uint32_t	prior_ssthresh; /* ssthresh saved at recovery start	*/
-			uint32_t	high_seq;	/* snd_nxt at onset of congestion	*/
+			uint32_t			prior_ssthresh; /* ssthresh saved at recovery start	*/
+			uint32_t			high_seq;	/* snd_nxt at onset of congestion	*/
 
-			uint32_t	retrans_stamp;	/* Timestamp of the last retransmit,
-						 * also used in SYN-SENT to remember stamp of
-						 * the first SYN. */
-			uint32_t	undo_marker;	/* tracking retrans started here. */
-			int	undo_retrans;	/* number of undoable retransmissions. */
-			uint32_t	total_retrans;	/* Total retransmits for entire connection */
+			uint32_t			retrans_stamp;	/* Timestamp of the last retransmit, also used in SYN-SENT to remember stamp of the first SYN. */
+			uint32_t			undo_marker;	/* tracking retrans started here. */
+			int						undo_retrans;	/* number of undoable retransmissions. */
+			uint32_t			total_retrans;	/* Total retransmits for entire connection */
 
-			unsigned int		keepalive_time;	  /* time before keep alive takes place */
-			unsigned int		keepalive_intvl;  /* time interval between keep alive probes */
+			unsigned int	keepalive_time;	  /* time before keep alive takes place */
+			unsigned int	keepalive_intvl;  /* time interval between keep alive probes */
 
 			int			linger2;
 
-		/* Receiver side RTT estimation */
+			/* Receiver side RTT estimation */
 			struct {
 				uint32_t	rtt;
 				uint32_t	seq;
 				uint32_t	time;
 			} rcv_rtt_est;
 
-		/* Receiver queue space */
+			/* Receiver queue space */
 			struct {
 				int	space;
 				uint32_t	seq;
@@ -581,8 +582,7 @@ class XTRANSPORT : public Element {
 		void ProcessPollEvent(unsigned short, unsigned int);
 		void CancelPollEvent(unsigned short _sport);
 		// bool ProcessPollTimeout(unsigned short, PollEvent& pe);
-    
-    
+
     // Xsockets API handlers
 		void Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg);
 		void Xsetsockopt(unsigned short _sport, xia::XSocketMsg *xia_socket_msg);

@@ -23,19 +23,61 @@
 ** - fix issue in SYN code with XIDPairToConnectPending (see comment in code for details)
 */
 
+/* 
+ * Notes: 1. ACKheader's #ack might be wrong
+ * 
+ * old version
+ * TransportHeaderEncap *thdr = TransportHeaderEncap::MakeSYNHeader(0, -1, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+ * TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader(0, 0, 0, calc_recv_window(new_sk)); 
+ * TransportHeaderEncap *thdr = TransportHeaderEncap::MakeDATAHeader(sk->next_send_seqnum, sk->ack_num, 0, calc_recv_window(sk)); 
+ * TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); 
+ *
+ * added in new version
+ * TransportHeaderEncap *thdr = TransportHeaderEncap::MakeFINHeader(sk->next_send_seqnum, sk->ack_num, 0, calc_recv_window(sk)); 
+ * TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeFINACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(new_sk)); 
+ * TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(new_sk)); // ACK for SYNACK
+ * TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(new_sk)); // ACK for FINACK
+ * 
+ * Actions:
+ * retransmit SYNACK; find and send FIN msg to Xsocket; add RTO for retransmission; create pending in 1873 - 1899 into syn handler
+   sk->recv_pending if is true, send error back to application; ref 2468 with a error code
+ * Q: 
+ * DATA: #seq = #old_seq + 1 (last ACK's #seq); #ack = #old_ack; ACK: #seq = 0; #ack = #seq of received DATA's  + 1 // http://packetlife.net/blog/2010/jun/7/understanding-tcp-sequence-acknowledgment-numbers/ 
+ * how to ensure keep transmitting packets contrainsted by the window size?
+ * need to report anything to API when close connection? send a pollUP?
+ * How poll works? 
+ * Connection:
+ * Client:
+ * 	- Xconnect() create client socket if not done in Xsocket, send SYN to network, report XCONNECTING to API;
+ * 	- processNetworkPacket() receives SYNACK: signal API for polling, *send ACK* and report XCONNECTED to API 
+ * Server:
+ *  - processNetworkPacket() receives SYN: create server socket, push that into pending connection buffer, signal the API for polling, alert???
+ * 	- Xaccept() pop the server socket from the pending connection buffer, send SYNACK to network, report client address to API and *wait for ACK* below 
+ *  - *processNetworkPacket() receives ACK of SYNACK:*: what to do? send to API about what? where is the point to start to send data???
+ * 
+ * Termination (Client/Server): closer side can't send packet but receive
+ * 	- Xclose() send FIN and timeout for tear down 
+ * 	- processNetworkPacket receives FIN: send FINACK, and timeout for tear down
+ * 	- processNetworkPacket receives FINACK: send ACK and tear down immediately
+ * 	- processNetworkPacket receives ACK of FINACK: close immediately 
+ * 
+ * Data flow (Client/Server):
+ * 	- processNetworkPacket receives DATA: put data into buffer, signal API for pulling, send ACK
+ *  - processNetworkPacket receives ACK: clear all the Acked packets in the buffer, update window variables, reset timer
+ */ 
 CLICK_DECLS
 
 XTRANSPORT::XTRANSPORT(): _timer(this) {
 	GOOGLE_PROTOBUF_VERIFY_VERSION;
 	_id = 0;
-	isConnected = false;
+	isConnected = 0;
 
 	_ackdelay_ms = ACK_DELAY;
 	_teardown_wait_ms = TEARDOWN_DELAY;
 
-//	pthread_mutexattr_init(&_lock_attr);
-//	pthread_mutexattr_settype(&_lock_attr, PTHREAD_MUTEX_RECURSIVE);
-//	pthread_mutex_init(&_lock, &_lock_attr);
+	// pthread_mutexattr_init(&_lock_attr);
+	// pthread_mutexattr_settype(&_lock_attr, PTHREAD_MUTEX_RECURSIVE);
+	// pthread_mutex_init(&_lock, &_lock_attr);
 
 	cp_xid_type("SID", &_sid_type);
 }
@@ -88,7 +130,7 @@ int XTRANSPORT::configure(Vector<String> &conf, ErrorHandler *errh) {
 }
 
 XTRANSPORT::~XTRANSPORT() {
-	//Clear all hashtable entries
+	// Clear all hashtable entries
 	XIDtoPort.clear();
 	portToSock.clear();
 	XIDtoPushPort.clear();
@@ -99,15 +141,15 @@ XTRANSPORT::~XTRANSPORT() {
 	xcmp_listeners.clear();
 	nxt_xport.clear();
 
-//	pthread_mutex_destroy(&_lock);
-//	pthread_mutexattr_destroy(&_lock_attr);
+	// pthread_mutex_destroy(&_lock);
+	// pthread_mutexattr_destroy(&_lock_attr);
 }
 
 int XTRANSPORT::initialize(ErrorHandler *) {
 	_errh = (SyslogErrorHandler*)ErrorHandler::default_handler();
 	_timer.initialize(this);
-	//_timer.schedule_after_msec(1000);
-	//_timer.unschedule();
+	// _timer.schedule_after_msec(1000);
+	// _timer.unschedule();
 	return 0;
 }
 
@@ -121,7 +163,7 @@ char *XTRANSPORT::random_xid(const char *type, char *buf) {
 }
 
 void XTRANSPORT::run_timer(Timer *timer) {
-//	pthread_mutex_lock(&_lock);
+	// pthread_mutex_lock(&_lock);
 	assert(timer == &_timer);
 
 	Timestamp now = Timestamp::now();
@@ -141,23 +183,22 @@ void XTRANSPORT::run_timer(Timer *timer) {
 
 		// check if pending
 		if (sk->timer_on == true) {
-			// check if synack waiting
+			// retransmit syn after timeout 
 			if (sk->synack_waiting == true && sk->expiry <= now) {
-				//click_chatter("Timer: synack waiting\n");
+				// click_chatter("Timer: synack waiting\n");
 				if (sk->num_connect_tries <= MAX_CONNECT_TRIES) {
-					//click_chatter("Timer: SYN RETRANSMIT! \n");
+					// click_chatter("Timer: SYN RETRANSMIT! \n");
 					copy = copy_packet(sk->syn_pkt, sk);
-					// retransmit syn
 					XIAHeader xiah(copy);
 					// click_chatter("Timer: (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (char *)xiah.payload(), xiah.plen());
 					output(NETWORK_PORT).push(copy);
-
+					// reset 
 					sk->timer_on = true;
 					sk->synack_waiting = true;
 					sk->expiry = now + Timestamp::make_msec(_ackdelay_ms);
 					sk->num_connect_tries++;
-
-				} else {
+				} 
+				else {
 					// Stop sending the connection request & Report the failure to the application
 					sk->timer_on = false;
 					sk->synack_waiting = false;
@@ -176,14 +217,49 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					}
 				}
 			} 
-			else if (sk->dataack_waiting == true && sk->expiry <= now ) {
+			// chenren: retransmit synack begins
+			if (sk->synackack_waiting == true && sk->expiry <= now) {
+				// click_chatter("Timer: synack waiting\n");
+				if (sk->num_connect_tries <= MAX_CONNECT_TRIES) {
+					click_chatter("Timer: SYNACK RETRANSMIT! \n");
+					copy = copy_packet(sk->synack_pkt, sk); // chenren: added for retransmission
+					XIAHeader xiah(copy);
+					// click_chatter("Timer: (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (char *)xiah.payload(), xiah.plen());
+					output(NETWORK_PORT).push(copy);
+					// reset 
+					sk->timer_on = true;
+					sk->synackack_waiting = true;
+					sk->expiry = now + Timestamp::make_msec(_ackdelay_ms);
+					sk->num_connect_tries++;
+				} 
+				else {
+					// Stop sending the connection request & Report the failure to the application
+					sk->timer_on = false;
+					sk->synackack_waiting = false;
+					
+					// Notify API that the connection failed
+					xia::XSocketMsg xsm;
+					//_errh->debug("Timer: Sent packet to socket with port %d", _sport);
+					xsm.set_type(xia::XCONNECT);
+					xsm.set_sequence(0); // TODO: what should This be?
+					xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
+					connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
+					ReturnResult(_sport, &xsm);
+
+					if (sk->polling) {
+						ProcessPollEvent(_sport, POLLHUP);
+					}
+				}
+			} 			
+			// chenren: retransmit synack ends
+			// retransmit data packet
+			else if (sk->dataack_waiting == true && sk->expiry <= now) {
 				// adding check to see if anything was retransmitted. We can get in here with
 				// no packets in the sk->send_bufer array waiting to go and will stay here forever
 				bool retransmit_sent = false;
 
 				if (sk->num_retransmit_tries < MAX_RETRANSMIT_TRIES) {
 					// click_chatter("Timer: DATA RETRANSMIT at from (%s) from_port=%d send_base=%d next_seq=%d \n\n", (_local_addr.unparse()).c_str(), _sport, sk->send_base, sk->next_send_seqnum );
-					// retransmit data
 					for (unsigned int i = sk->send_base; i < sk->next_send_seqnum; i++) {
 						if (sk->send_buffer[i % sk->send_buffer_size] != NULL) {
 							copy = copy_packet(sk->send_buffer[i % sk->send_buffer_size], sk);
@@ -195,10 +271,11 @@ void XTRANSPORT::run_timer(Timer *timer) {
 						}
 					}
 				} 
+				// chenren: TODO: what if exceeds the max data retransmission
 				else {
 					//click_chatter("retransmit counter exceeded\n");
-					// FIXME what cleanup should happen here?
 					// should we do a NAK?
+ 
 				}
 
 				if (retransmit_sent) {
@@ -214,24 +291,21 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					sk->dataack_waiting = false;
 					sk->num_retransmit_tries = 0;
 				}
-
 			} 
+			// timeout for closing the connection 
 			else if (sk->teardown_waiting == true && sk->teardown_expiry <= now) {
 				tear_down = true;
 				sk->timer_on = false;
 				portToActive.set(_sport, false);
 
-				//XID source_xid = portToSock.get(_sport).xid;
-
+				// XID source_xid = portToSock.get(_sport).xid;
 				// this check for -1 prevents a segfault cause by bad XIDs
 				// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
-				// XreadLocalHostAddr and then closing the socket without doing anything else will
-				// cause the problem
+				// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
 				// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
 				if (sk->src_path.destination_node() != -1) {
 					XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
 					if (!sk->isAcceptSocket) {
-
 						//click_chatter("deleting route %s from port %d\n", source_xid.unparse().c_str(), _sport);
 						delRoute(source_xid);
 						XIDtoPort.erase(source_xid);
@@ -256,15 +330,15 @@ void XTRANSPORT::run_timer(Timer *timer) {
 
 		if (tear_down == false) {
 			// find the (next) earlist expiry
-			if (sk->timer_on == true && sk->expiry > now && ( sk->expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
+			if (sk->timer_on == true && sk->expiry > now && (sk->expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
 				earlist_pending_expiry = sk->expiry;
 			}
-			if (sk->timer_on == true && sk->teardown_expiry > now && ( sk->teardown_expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
+			if (sk->timer_on == true && sk->teardown_expiry > now && (sk->teardown_expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
 				earlist_pending_expiry = sk->teardown_expiry;
 			}
 
 			// check for CID request cases
-			for (HashTable<XID, bool>::iterator it = sk->XIDtoTimerOn.begin(); it != sk->XIDtoTimerOn.end(); ++it ) {
+			for (HashTable<XID, bool>::iterator it = sk->XIDtoTimerOn.begin(); it != sk->XIDtoTimerOn.end(); ++it) {
 				XID requested_cid = it->first;
 				bool timer_on = it->second;
 
@@ -282,12 +356,12 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (char *)xiah.payload(), xiah.plen());
 					output(NETWORK_PORT).push(copy);
 
-					cid_req_expiry  = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+					cid_req_expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
 					sk->XIDtoExpiryTime.set(requested_cid, cid_req_expiry);
 					sk->XIDtoTimerOn.set(requested_cid, true);
 				}
 
-				if (timer_on == true && cid_req_expiry > now && ( cid_req_expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
+				if (timer_on == true && cid_req_expiry > now && (cid_req_expiry < earlist_pending_expiry || earlist_pending_expiry == now)) {
 					earlist_pending_expiry = cid_req_expiry;
 				}
 			}
@@ -409,8 +483,7 @@ bool XTRANSPORT::should_buffer_received_packet(WritablePacket *p, sock *sk) {
 		// TODO: if we switch to a byte-based, buf size, this needs to change
 		TransportHeader thdr(p);
 		int received_seqnum = thdr.seq_num();
-		if (received_seqnum >= sk->next_recv_seqnum &&
-			received_seqnum < sk->next_recv_seqnum + sk->recv_buffer_size) {
+		if (received_seqnum >= sk->next_recv_seqnum && received_seqnum < sk->next_recv_seqnum + sk->recv_buffer_size) {
 			return true;
 		}
 	} 
@@ -677,90 +750,90 @@ void XTRANSPORT::ProcessAPIPacket(WritablePacket *p_in) {
 	xia_socket_msg.ParseFromString(p_buf);
 
 	switch(xia_socket_msg.type()) {
-	case xia::XSOCKET:
-		Xsocket(_sport, &xia_socket_msg);
-		break;
-	case xia::XSETSOCKOPT:
-		Xsetsockopt(_sport, &xia_socket_msg);
-		break;
-	case xia::XGETSOCKOPT:
-		Xgetsockopt(_sport, &xia_socket_msg);
-		break;
-	case xia::XBIND:
-		Xbind(_sport, &xia_socket_msg);
-		break;
-	case xia::XCLOSE:
-		Xclose(_sport, &xia_socket_msg);
-		break;
-	case xia::XCONNECT:
-		Xconnect(_sport, &xia_socket_msg);
-		break;
-	case xia::XREADYTOACCEPT:
-		XreadyToAccept(_sport, &xia_socket_msg);
-		break;
-	case xia::XACCEPT:
-		Xaccept(_sport, &xia_socket_msg);
-		break;
-	case xia::XCHANGEAD:
-		Xchangead(_sport, &xia_socket_msg);
-		break;
-	case xia::XREADLOCALHOSTADDR:
-		Xreadlocalhostaddr(_sport, &xia_socket_msg);
-		break;
-	case xia::XUPDATENAMESERVERDAG:
-		Xupdatenameserverdag(_sport, &xia_socket_msg);
-		break;
-	case xia::XREADNAMESERVERDAG:
-		Xreadnameserverdag(_sport, &xia_socket_msg);
-		break;
-	case xia::XISDUALSTACKROUTER:
-		Xisdualstackrouter(_sport, &xia_socket_msg);
-		break;
-	case xia::XSEND:
-		Xsend(_sport, &xia_socket_msg, p_in);
-		break;
-	case xia::XSENDTO:
-		Xsendto(_sport, &xia_socket_msg, p_in);
-		break;
-	case xia::XRECV:
-		Xrecv(_sport, &xia_socket_msg);
-		break;
-	case xia::XRECVFROM:
-		Xrecvfrom(_sport, &xia_socket_msg);
-		break;
-	case xia::XREQUESTCHUNK:
-		XrequestChunk(_sport, &xia_socket_msg, p_in);
-		break;
-	case xia::XGETCHUNKSTATUS:
-		XgetChunkStatus(_sport, &xia_socket_msg);
-		break;
-	case xia::XREADCHUNK:
-		XreadChunk(_sport, &xia_socket_msg);
-		break;
-	case xia::XREMOVECHUNK:
-		XremoveChunk(_sport, &xia_socket_msg);
-		break;
-	case xia::XPUTCHUNK:
-		XputChunk(_sport, &xia_socket_msg);
-		break;
-	case xia::XGETPEERNAME:
-		Xgetpeername(_sport, &xia_socket_msg);
-		break;
-	case xia::XGETSOCKNAME:
-		Xgetsockname(_sport, &xia_socket_msg);
-		break;
-	case xia::XPOLL:
-		Xpoll(_sport, &xia_socket_msg);
-		break;
-	case xia::XPUSHCHUNKTO:
-		XpushChunkto(_sport, &xia_socket_msg, p_in);
-		break;
-	case xia::XBINDPUSH:
-		XbindPush(_sport, &xia_socket_msg);
-		break;
-	default:
-		click_chatter("\n\nERROR: API TRAFFIC !!!\n\n");
-		break;
+		case xia::XSOCKET:
+			Xsocket(_sport, &xia_socket_msg);
+			break;
+		case xia::XSETSOCKOPT:
+			Xsetsockopt(_sport, &xia_socket_msg);
+			break;
+		case xia::XGETSOCKOPT:
+			Xgetsockopt(_sport, &xia_socket_msg);
+			break;
+		case xia::XBIND:
+			Xbind(_sport, &xia_socket_msg);
+			break;
+		case xia::XCLOSE:
+			Xclose(_sport, &xia_socket_msg);
+			break;
+		case xia::XCONNECT:
+			Xconnect(_sport, &xia_socket_msg);
+			break;
+		case xia::XREADYTOACCEPT:
+			XreadyToAccept(_sport, &xia_socket_msg);
+			break;
+		case xia::XACCEPT:
+			Xaccept(_sport, &xia_socket_msg);
+			break;
+		case xia::XCHANGEAD:
+			Xchangead(_sport, &xia_socket_msg);
+			break;
+		case xia::XREADLOCALHOSTADDR:
+			Xreadlocalhostaddr(_sport, &xia_socket_msg);
+			break;
+		case xia::XUPDATENAMESERVERDAG:
+			Xupdatenameserverdag(_sport, &xia_socket_msg);
+			break;
+		case xia::XREADNAMESERVERDAG:
+			Xreadnameserverdag(_sport, &xia_socket_msg);
+			break;
+		case xia::XISDUALSTACKROUTER:
+			Xisdualstackrouter(_sport, &xia_socket_msg);
+			break;
+		case xia::XSEND:
+			Xsend(_sport, &xia_socket_msg, p_in);
+			break;
+		case xia::XSENDTO:
+			Xsendto(_sport, &xia_socket_msg, p_in);
+			break;
+		case xia::XRECV:
+			Xrecv(_sport, &xia_socket_msg);
+			break;
+		case xia::XRECVFROM:
+			Xrecvfrom(_sport, &xia_socket_msg);
+			break;
+		case xia::XREQUESTCHUNK:
+			XrequestChunk(_sport, &xia_socket_msg, p_in);
+			break;
+		case xia::XGETCHUNKSTATUS:
+			XgetChunkStatus(_sport, &xia_socket_msg);
+			break;
+		case xia::XREADCHUNK:
+			XreadChunk(_sport, &xia_socket_msg);
+			break;
+		case xia::XREMOVECHUNK:
+			XremoveChunk(_sport, &xia_socket_msg);
+			break;
+		case xia::XPUTCHUNK:
+			XputChunk(_sport, &xia_socket_msg);
+			break;
+		case xia::XGETPEERNAME:
+			Xgetpeername(_sport, &xia_socket_msg);
+			break;
+		case xia::XGETSOCKNAME:
+			Xgetsockname(_sport, &xia_socket_msg);
+			break;
+		case xia::XPOLL:
+			Xpoll(_sport, &xia_socket_msg);
+			break;
+		case xia::XPUSHCHUNKTO:
+			XpushChunkto(_sport, &xia_socket_msg, p_in);
+			break;
+		case xia::XBINDPUSH:
+			XbindPush(_sport, &xia_socket_msg);
+			break;
+		default:
+			click_chatter("\n\nERROR: API TRAFFIC !!!\n\n");
+			break;
 	}
 
 	p_in->kill();
@@ -773,6 +846,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 	XIAHeader xiah(p_in->xia_header());
 	XIAPath dst_path = xiah.dst_path();
 	XID _destination_xid(xiah.hdr()->node[xiah.last()].xid);
+	
 	//TODO:In case of stream use source AND destination XID to find port, if not found use source. No TCP like protocol exists though
 	//TODO:pass dag back to recvfrom. But what format?
 
@@ -844,37 +918,31 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 //			click_chatter("received STREAM packet on port %u;   recv window = %u\n", _dport, thdr.recv_window());
 		sk->remote_recv_window = thdr.recv_window();
 		
-
 		if (thdr.pkt_info() == TransportHeader::SYN) {
-			//click_chatter("syn dport = %d\n", _dport);
-			// Connection request from client...
-		
-			//sock *sk = portToSock.get(_dport); // TODO: check that mapping exists
+			// click_chatter("Connection request from client... syn dport = %d\n", _dport);		
+			// sock *sk = portToSock.get(_dport); // TODO: check that mapping exists
 
 			// First, check if this request is already in the pending queue
-//			HashTable<XIDpair , bool>::iterator it;
-//			it = XIDpairToConnectPending.find(xid_pair);
+			// HashTable<XIDpair , bool>::iterator it;
+			// it = XIDpairToConnectPending.find(xid_pair);
 
 			// FIXME:
 			// XIDpairToConnectPending never gets cleared, and will cause problems if matching XIDs
 			// were used previously. Commenting out the check for now. Need to look into whether
 			// or not we can just get rid of this logic? probably neede for retransmit cases
 			// if needed, where should it be cleared???
-//			if (it == XIDpairToConnectPending.end()) {
+			// if (it == XIDpairToConnectPending.end()) {
 				// if this is new request, put it in the queue
+				// TODO: 1. prepare new Daginfo and store it; 2. send SYNACK to client
 
-				// Todo: 1. prepare new Daginfo and store it
-				//	 2. send SYNACK to client
-
-				//1. Prepare new sock for this connection
+				// Prepare new sock for this connection
 				sock *new_sk = new sock();
 				new_sk->port = -1; // just for now. This will be updated via Xaccept call
 
 				new_sk->sock_type = SOCK_STREAM;
-
 				new_sk->dst_path = src_path;
 				new_sk->src_path = dst_path;
-				new_sk->isConnected = true;
+				new_sk->isConnected = -1; // chenren: pending, wait for ACK of SYNACK
 				new_sk->initialized = true;
 				new_sk->nxt = LAST_NODE_DEFAULT;
 				new_sk->last = LAST_NODE_DEFAULT;
@@ -887,10 +955,12 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				//new_sk->pendingAccepts = new queue<xia::XSocketMsg*>();
 
 				sk->pending_connection_buf.push(new_sk);
-
+		
+				/* 
+				 * chenren: move to ACK handling
 				if (sk->polling) {
 					// tell API we are writeable
-					ProcessPollEvent(_dport, POLLOUT);
+					ProcessPollEvent(_dport, POLLOUT); 
 				}
 
 				// Mark these src & dst XID pair
@@ -903,14 +973,16 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					sk->pendingAccepts.pop();
 					delete acceptXSM;
 				}
-//			}
+				* chenren: move to ACK handling
+				*/
+			// }
 		} 
 		else if (thdr.pkt_info() == TransportHeader::SYNACK) {
-			
 			// Clear timer
 			sk->timer_on = false;
 			sk->synack_waiting = false;
 
+			// warning: client don't check isConnected status, which seems to be a bug
 			if (sk->polling) {
 				// tell API we are writble now
 				ProcessPollEvent(_dport, POLLOUT);
@@ -926,7 +998,43 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			connect_msg->set_ddag(src_path.unparse().c_str());
 			connect_msg->set_status(xia::X_Connect_Msg::XCONNECTED);
 			ReturnResult(_dport, &xsm);
-		} 
+			
+			// chenren: send SYNACK's ACK back to server begins:
+			sk->dst_path = src_path;
+
+			// Add XIA headers
+			XIAHeaderEncap xiah_new;
+			xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+			xiah_new.set_last(LAST_NODE_DEFAULT);
+			xiah_new.set_hlim(HLIM_DEFAULT);
+			xiah_new.set_dst_path(src_path);
+			xiah_new.set_src_path(dst_path);
+
+			const char* dummy = "SYNACK's ACK";
+			WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+			WritablePacket *p = NULL;
+
+			xiah_new.set_plen(strlen(dummy));
+
+			TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+			p = thdr_new->encap(just_payload_part);
+
+			thdr_new->update();
+			xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+			p = xiah_new.encap(p, false);
+			delete thdr_new;
+
+			XIAHeader xiah1(p);
+			String pld((char *)xiah1.payload(), xiah1.plen());
+			click_chatter("Send SYNACK's ACK back...\n\n");
+			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
+
+			output(NETWORK_PORT).push(p);			
+			// chenren: send ACK back to server ends
+		}
+		// put data into buffer, signal API for pulling, send ACK
 		else if (thdr.pkt_info() == TransportHeader::DATA) {
 			//printf("(%s) my_sport=%u  my_sid=%s  his_sid=%s\n", (_local_addr.unparse()).c_str(),  _dport,  _destination_xid.unparse().c_str(), _source_xid.unparse().c_str());
 			HashTable<unsigned short, bool>::iterator it1;
@@ -936,11 +1044,11 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 				// buffer data, if we have room
 				if (should_buffer_received_packet(p_in, sk)) {
-//					printf("<<< add_packet_to_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", sk->port, sk->recv_base, sk->next_recv_seqnum, sk->recv_buffer_size);
+					// printf("<<< add_packet_to_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", sk->port, sk->recv_base, sk->next_recv_seqnum, sk->recv_buffer_size);
 					add_packet_to_recv_buf(p_in, sk);
 					sk->next_recv_seqnum = next_missing_seqnum(sk);
 					// TODO: update recv window
-//					printf(">>> add_packet_to_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", sk->port, sk->recv_base, sk->next_recv_seqnum, sk->recv_buffer_size);
+					// printf(">>> add_packet_to_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", sk->port, sk->recv_base, sk->next_recv_seqnum, sk->recv_buffer_size);
 
 					if (sk->polling) {
 						// tell API we are readable
@@ -949,13 +1057,13 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					check_for_and_handle_pending_recv(sk);
 				}
 
-				portToSock.set(_dport, sk); // TODO: why do we need this?
+				portToSock.set(_dport, sk); // TODO: chenren: why do we need this?
 
 				//In case of Client Mobility...	 Update 'sk->dst_path'
 				sk->dst_path = src_path;
 
 				// send the cumulative ACK to the sender
-				//Add XIA headers
+				// Add XIA headers
 				XIAHeaderEncap xiah_new;
 				xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
 				xiah_new.set_last(LAST_NODE_DEFAULT);
@@ -970,7 +1078,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 				xiah_new.set_plen(strlen(dummy));
 
-				TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader( 0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+				TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
 				p = thdr_new->encap(just_payload_part);
 
 				thdr_new->update();
@@ -990,69 +1098,241 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			}
 		} 
 		else if (thdr.pkt_info() == TransportHeader::ACK) {
+			// chenren: handler for SYNACK's ACK begins
+			if (sk->isConnected == -1) {
+				// Clear timer
+				sk->timer_on = false;
+				sk->synackack_waiting = false;
+			
+				sk->isConnected = 1;
 
-			HashTable<unsigned short, bool>::iterator it1;
-			it1 = portToActive.find(_dport);
+				if (sk->polling) {
+					// tell API we are writeable
+					ProcessPollEvent(_dport, POLLOUT); // chenren: change from POLLOUT to POLL
+				}
+				// Mark these src & dst XID pair
+				XIDpairToConnectPending.set(xid_pair, true);
 
-			if (it1 != portToActive.end()) {
-				//In case of Client Mobility...	 Update 'sk->dst_path'
-				sk->dst_path = src_path;
+				// If the app is ready for a new connection, alert it
+				if (!sk->pendingAccepts.empty()) {
+					xia::XSocketMsg *acceptXSM = sk->pendingAccepts.front();
+					ReturnResult(_dport, acceptXSM);
+					sk->pendingAccepts.pop();
+					delete acceptXSM;
+				}
+			}
+			// chenren: handler for SYNACK's ACK ends
+			
+			// chenren: handler for FINACK's ACK starts
+			else if (sk->isClosed == -1) {
+				sk->isClosed = 1;
+				
+				sk->timer_on = false;
+				portToActive.set(_dport, false);
 
-				int remote_next_seqnum_expected = thdr.ack_num();
-
-				bool resetTimer = false;
-
-				// Clear all Acked packets
-				for (int i = sk->send_base; i < remote_next_seqnum_expected; i++) {
-					int idx = i % sk->send_buffer_size;
-					if (sk->send_buffer[idx]) {
-						sk->send_buffer[idx]->kill();
-						sk->send_buffer[idx] = NULL;
+				// XID source_xid = portToSock.get(_sport).xid;
+				// this check for -1 prevents a segfault cause by bad XIDs
+				// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
+				// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
+				// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
+				if (sk->src_path.destination_node() != -1) {
+					XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
+					if (!sk->isAcceptSocket) {
+						//click_chatter("deleting route %s from port %d\n", source_xid.unparse().c_str(), _sport);
+						delRoute(source_xid);
+						XIDtoPort.erase(source_xid);
 					}
-
-					resetTimer = true;
 				}
 
-				// Update the variables
-				sk->send_base = remote_next_seqnum_expected;
+				delete sk;
+				portToSock.erase(_dport);
+				portToActive.erase(_dport);
+				hlim.erase(_dport);
 
-				// Reset timer
-				if (resetTimer) {
-					sk->timer_on = true;
-					sk->dataack_waiting = true;
-					// FIXME: should we reset retransmit_tries here?
-					sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
-
-					if (!_timer.scheduled() || _timer.expiry() >= sk->expiry )
-						_timer.reschedule_at(sk->expiry);
-
-					if (sk->send_base == sk->next_send_seqnum) {
-
-						// Clear timer
-						sk->timer_on = false;
-						sk->dataack_waiting = false;
-						sk->num_retransmit_tries = 0;
-						//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+				nxt_xport.erase(_dport);
+				xcmp_listeners.remove(_dport);
+				for (int i = 0; i < sk->send_buffer_size; i++) {
+					if (sk->send_buffer[i] != NULL) {
+						sk->send_buffer[i]->kill();
+						sk->send_buffer[i] = NULL;
 					}
-				}
-				portToSock.set(_dport, sk);
+				}				
+			}
+			// chenren: handler for FINACK's ACK ends
+			else if (sk->isConnected == 1 && sk->isClosed == 0) {
+				HashTable<unsigned short, bool>::iterator it1;
+				it1 = portToActive.find(_dport);
 
-			} 
-			else {
-				//click_chatter("port not found\n");
+				if (it1 != portToActive.end()) {
+					//In case of Client Mobility...	 Update 'sk->dst_path'
+					sk->dst_path = src_path;
+
+					int remote_next_seqnum_expected = thdr.ack_num();
+
+					bool resetTimer = false;
+
+					// Clear all Acked packets
+					for (int i = sk->send_base; i < remote_next_seqnum_expected; i++) {
+						int idx = i % sk->send_buffer_size;
+						if (sk->send_buffer[idx]) {
+							sk->send_buffer[idx]->kill();
+							sk->send_buffer[idx] = NULL;
+						}
+						resetTimer = true;
+					}
+
+					// Update the variables
+					sk->send_base = remote_next_seqnum_expected;
+
+					// Reset timer
+					if (resetTimer) {
+						sk->timer_on = true;
+						sk->dataack_waiting = true;
+						// FIXME: should we reset retransmit_tries here?
+						sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+
+						if (!_timer.scheduled() || _timer.expiry() >= sk->expiry)
+							_timer.reschedule_at(sk->expiry);
+
+						if (sk->send_base == sk->next_send_seqnum) {
+							// Clear timer
+							sk->timer_on = false;
+							sk->dataack_waiting = false;
+							sk->num_retransmit_tries = 0;
+							//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+						}
+					}
+					portToSock.set(_dport, sk);
+				}
+				else {
+					//click_chatter("port not found\n");
+				}
 			}
 		} 
+		// chenren: add handler for receiving FIN and FINACK begins
 		else if (thdr.pkt_info() == TransportHeader::FIN) {
-			//click_chatter("FIN received, doing nothing\n");
+			click_chatter("FIN received, doing nothing\n");
+
+			// Set timer
+			sk->timer_on = true;
+			sk->teardown_waiting = true;
+			sk->teardown_expiry = Timestamp::now() + Timestamp::make_msec(_teardown_wait_ms);
+
+			if (! _timer.scheduled() || _timer.expiry() >= sk->teardown_expiry)
+				_timer.reschedule_at(sk->teardown_expiry);
+
+			portToSock.set(_dport, sk);
+
+			xcmp_listeners.remove(_dport);
+				
+			sk->dst_path = src_path;
+
+			// send FINACK
+			// Add XIA headers
+			XIAHeaderEncap xiah_new;
+			xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+			xiah_new.set_last(LAST_NODE_DEFAULT);
+			xiah_new.set_hlim(HLIM_DEFAULT);
+			xiah_new.set_dst_path(src_path);
+			xiah_new.set_src_path(dst_path);
+
+			const char* dummy = "FINACK";
+			WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+			WritablePacket *p = NULL;
+
+			xiah_new.set_plen(strlen(dummy));
+
+			TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeFINACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+			p = thdr_new->encap(just_payload_part);
+
+			thdr_new->update();
+			xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+			p = xiah_new.encap(p, false);
+			delete thdr_new;
+
+			XIAHeader xiah1(p);
+			String pld((char *)xiah1.payload(), xiah1.plen());
+			click_chatter("FINACK received, sending SYNACK's ACK back...\n\n");
+			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
+
+			output(NETWORK_PORT).push(p);			  
+			// tell API we had an error			
 			if (sk->polling) {
-				// tell API we had an error
 				ProcessPollEvent(_dport, POLLHUP);
 			}
 		}
+		// chenren 
+		else if (thdr.pkt_info() == TransportHeader::FINACK) {
+			sk->dst_path = src_path;
+
+			// Add XIA headers
+			XIAHeaderEncap xiah_new;
+			xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+			xiah_new.set_last(LAST_NODE_DEFAULT);
+			xiah_new.set_hlim(HLIM_DEFAULT);
+			xiah_new.set_dst_path(src_path);
+			xiah_new.set_src_path(dst_path);
+
+			const char* dummy = "SYNACK's ACK";
+			WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+			WritablePacket *p = NULL;
+
+			xiah_new.set_plen(strlen(dummy));
+
+			TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+			p = thdr_new->encap(just_payload_part);
+
+			thdr_new->update();
+			xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+			p = xiah_new.encap(p, false);
+			delete thdr_new;
+
+			XIAHeader xiah1(p);
+			String pld((char *)xiah1.payload(), xiah1.plen());
+			click_chatter("FINACK received, sending SYNACK's ACK back...\n\n");
+			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
+
+			output(NETWORK_PORT).push(p);			 
+			
+			sk->timer_on = false;
+			portToActive.set(_dport, false);
+
+			// XID source_xid = portToSock.get(_sport).xid;
+			// this check for -1 prevents a segfault cause by bad XIDs
+			// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
+			// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
+			// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
+			if (sk->src_path.destination_node() != -1) {
+				XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
+				if (!sk->isAcceptSocket) {
+					//click_chatter("deleting route %s from port %d\n", source_xid.unparse().c_str(), _sport);
+					delRoute(source_xid);
+					XIDtoPort.erase(source_xid);
+				}
+			}
+
+			delete sk;
+			portToSock.erase(_dport);
+			portToActive.erase(_dport);
+			hlim.erase(_dport);
+
+			nxt_xport.erase(_dport);
+			xcmp_listeners.remove(_dport);
+			for (int i = 0; i < sk->send_buffer_size; i++) {
+				if (sk->send_buffer[i] != NULL) {
+					sk->send_buffer[i]->kill();
+					sk->send_buffer[i] = NULL;
+				}
+			}		
+		}	
+		// chenren: add handler for receiving FIN and FINACK ends
 		else {
 			click_chatter("UNKNOWN dport = %d hdr=%d\n", _dport, thdr.pkt_info());
 		}
-
 	} 
 	else if (thdr.type() == TransportHeader::XSOCK_DGRAM) {
 
@@ -1167,7 +1447,7 @@ void XTRANSPORT::ProcessCachePacket(WritablePacket *p_in) {
 	click_chatter("CachePacket, dest: %s, src_cid %s OPCode: %d \n", destination_sid.unparse().c_str(), source_cid.unparse().c_str(), ch.opcode());
 	// click_chatter("dst_path: %s, src_path: %s, OPCode: %d\n", dst_path.unparse().c_str(), src_path.unparse().c_str(), ch.opcode());
 
-	if(_dport) {
+	if (_dport) {
 		//TODO: Refine the way we change DAG in case of migration. Use some control bits. Add verification
 		//sock sk=portToSock.get(_dport);
 		//sk.dst_path=xiah.src_path();
@@ -1298,39 +1578,42 @@ void XTRANSPORT::push(int port, Packet *p_input) {
 
 	WritablePacket *p_in = p_input->uniqueify();
 	//Depending on which CLICK-module-port it arrives at it could be control/API traffic/Data traffic
+	
+	// This is a "CLICK" port of UDP module.
+	switch(port) { 
+		// control packet from socket API
+		case API_PORT:	
+			ProcessAPIPacket(p_in);
+			break;
 
-	switch(port) { // This is a "CLICK" port of UDP module.
-	case API_PORT:	// control packet from socket API
-		ProcessAPIPacket(p_in);
-		break;
+		case BAD_PORT: //packet from ???
+			_errh->debug("\n\nERROR: BAD INPUT PORT TO XTRANSPORT!!!\n\n");
+			break;
 
-	case BAD_PORT: //packet from ???
-		_errh->debug("\n\nERROR: BAD INPUT PORT TO XTRANSPORT!!!\n\n");
-		break;
+		case NETWORK_PORT: //Packet from network layer
+			ProcessNetworkPacket(p_in);
+			p_in->kill();
+			break;
 
-	case NETWORK_PORT: //Packet from network layer
-		ProcessNetworkPacket(p_in);
-		p_in->kill();
-		break;
+		case CACHE_PORT:	//Packet from cache
+			// click_chatter(">>>>> Cache Port packet from socket Cache %d\n", port);
+			ProcessCachePacket(p_in);
+			p_in->kill();
+			break;
 
-	case CACHE_PORT:	//Packet from cache
-		// click_chatter(">>>>> Cache Port packet from socket Cache %d\n", port);
-		ProcessCachePacket(p_in);
-		p_in->kill();
-		break;
+		case XHCP_PORT:		//Packet with DHCP information
+			ProcessXhcpPacket(p_in);
+			p_in->kill();
+			break;
 
-	case XHCP_PORT:		//Packet with DHCP information
-		ProcessXhcpPacket(p_in);
-		p_in->kill();
-		break;
-
-	default:
-		click_chatter("packet from unknown port: %d\n", port);
-		break;
+		default:
+			click_chatter("packet from unknown port: %d\n", port);
+			break;
 	}
 //	pthread_mutex_unlock(&_lock);
 }
 
+// return the result message from xtransport to the API
 void XTRANSPORT::ReturnResult(int sport, xia::XSocketMsg *xia_socket_msg, int rc, int err) {
 	// click_chatter("sport=%d type=%d rc=%d err=%d\n", sport, type, rc, err);
 	xia::X_Result_Msg *x_result = xia_socket_msg->mutable_x_result();
@@ -1380,6 +1663,7 @@ void XTRANSPORT::add_handlers() {
 **
 ** FIXME: why is xia_socket_msg part of the xtransport class and not a local variable?????
 */
+// initilize the socket  
 void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 	// Open socket.
 	// click_chatter("Xsocket: create socket %d\n", _sport);
@@ -1392,6 +1676,7 @@ void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	sk->port = _sport;
 	sk->timer_on = false;
 	sk->synack_waiting = false;
+	sk->synackack_waiting = false;
 	sk->dataack_waiting = false;
 	sk->num_retransmit_tries = 0;
 	sk->teardown_waiting = false;
@@ -1491,21 +1776,21 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 
 	int rc = 0, ec = 0;
 
-	//Bind XID
-	//click_chatter("\n\nOK: SOCKET BIND !!!\\n");
-	//get source DAG from protobuf message
+	// Bind XID
+	// click_chatter("\n\nOK: SOCKET BIND !!!\\n");
+	// get source DAG from protobuf message
 
 	xia::X_Bind_Msg *x_bind_msg = xia_socket_msg->mutable_x_bind();
 
 	String sdag_string(x_bind_msg->sdag().c_str(), x_bind_msg->sdag().size());
 
-	//String sdag_string((const char*)p_in->data(),(const char*)p_in->end_data());
-//	_errh->debug("\nbind requested to %s, length=%d\n", sdag_string.c_str(), (int)p_in->length());
+	// String sdag_string((const char*)p_in->data(),(const char*)p_in->end_data());
+	// _errh->debug("\nbind requested to %s, length=%d\n", sdag_string.c_str(), (int)p_in->length());
 
-	//String str_local_addr=_local_addr.unparse();
-	//str_local_addr=str_local_addr+" "+xid_string;//Make source DAG _local_addr:SID
+	// String str_local_addr=_local_addr.unparse();
+	// str_local_addr=str_local_addr+" "+xid_string;//Make source DAG _local_addr:SID
 
-	//Set the source DAG in sock
+	// Set the source DAG in sock
 	sock *sk = portToSock.get(_sport);
 	if (sk->src_path.parse(sdag_string)) {
 		sk->nxt = LAST_NODE_DEFAULT;
@@ -1515,31 +1800,32 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 		sk->initialized = true;
 		sk->sdag = sdag_string;
 
-		//Check if binding to full DAG or just to SID only
-		Vector<XIAPath::handle_t> xids = sk->src_path.next_nodes( sk->src_path.source_node() );
+		// Check if binding to full DAG or just to SID only
+		Vector<XIAPath::handle_t> xids = sk->src_path.next_nodes(sk->src_path.source_node());
 		XID front_xid = sk->src_path.xid( xids[0] );
 		struct click_xia_xid head_xid = front_xid.xid();
 		uint32_t head_xid_type = head_xid.type;
-		if(head_xid_type == _sid_type) {
+		if (head_xid_type == _sid_type) {
 			sk->full_src_dag = false;
-		} else {
+		} 
+		else {
 			sk->full_src_dag = true;
 		}
 
 		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
-		//XID xid(xid_string);
-		//TODO: Add a check to see if XID is already being used
+		// XID xid(xid_string);
+		// TODO: Add a check to see if XID is already being used
 
 		// Map the source XID to source port (for now, for either type of tranports)
 		XIDtoPort.set(source_xid, _sport);
 		addRoute(source_xid);
-//		printf("Xbind, S2P %d, %p\n", _sport, sk);
+		// printf("Xbind, S2P %d, %p\n", _sport, sk);
 		portToSock.set(_sport, sk);
 
-		//click_chatter("Bound");
-		//click_chatter("set %d %d",_sport, __LINE__);
-
-	} else {
+		// click_chatter("Bound");
+		// click_chatter("set %d %d",_sport, __LINE__);
+	} 
+	else {
 		rc = -1;
 		ec = EADDRNOTAVAIL;
 	}
@@ -1579,9 +1865,10 @@ void XTRANSPORT::XbindPush(unsigned short _sport, xia::XSocketMsg *xia_socket_ms
 		XID front_xid = sk->src_path.xid( xids[0] );
 		struct click_xia_xid head_xid = front_xid.xid();
 		uint32_t head_xid_type = head_xid.type;
-		if(head_xid_type == _sid_type) {
+		if (head_xid_type == _sid_type) {
 			sk->full_src_dag = false; 
-		} else {
+		} 
+		else {
 			sk->full_src_dag = true;
 		}
 
@@ -1597,8 +1884,8 @@ void XTRANSPORT::XbindPush(unsigned short _sport, xia::XSocketMsg *xia_socket_ms
 
 		//click_chatter("Bound");
 		//click_chatter("set %d %d",_sport, __LINE__);
-
-	} else {
+	} 
+	else {
 		rc = -1;
 		ec = EADDRNOTAVAIL;
 		click_chatter("\n\nERROR: SOCKET PUSH BIND !!!\\n");
@@ -1611,17 +1898,74 @@ void XTRANSPORT::XbindPush(unsigned short _sport, xia::XSocketMsg *xia_socket_ms
 }
 
 void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
-	// Close port
-	//click_chatter("Xclose: closing %d\n", _sport);
-
+	// click_chatter("Xclose: closing %d\n", _sport);
+	
+	// chenren: send FIN starts
 	sock *sk = portToSock.get(_sport);
+	
+	// Recalculate source path
+	XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
+	String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse();
+	// Make source DAG _local_addr:SID
+	String dagstr = sk->src_path.unparse_re();
 
+	// Client Mobility...
+	if (dagstr.length() != 0 && dagstr != str_local_addr) {
+		// Moved!
+		// 1. Update 'sk->src_path'
+		sk->src_path.parse_re(str_local_addr);
+	}
+
+	// Case of initial binding to only SID
+	if (sk->full_src_dag == false) {
+		sk->full_src_dag = true;
+		String str_local_addr = _local_addr.unparse_re();
+		XID front_xid = sk->src_path.xid(sk->src_path.destination_node());
+		String xid_string = front_xid.unparse();
+		str_local_addr = str_local_addr + " " + xid_string; // Make source DAG _local_addr:SID
+		sk->src_path.parse_re(str_local_addr);
+	}
+	// Add XIA headers
+	XIAHeaderEncap xiah_new;
+	xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+	xiah_new.set_last(LAST_NODE_DEFAULT);
+	xiah_new.set_hlim(HLIM_DEFAULT); // xiah.set_hlim(hlim.get(_sport));??
+	xiah_new.set_dst_path(sk->dst_path);
+	xiah_new.set_src_path(sk->src_path);
+
+	const char* dummy = "FIN";
+	WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+	WritablePacket *p = NULL;
+
+	xiah_new.set_plen(strlen(dummy));
+
+	TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+	p = thdr_new->encap(just_payload_part);
+
+	thdr_new->update();
+	xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+	p = xiah_new.encap(p, false);
+	delete thdr_new;
+
+	XIAHeader xiah1(p);
+	String pld((char *)xiah1.payload(), xiah1.plen());
+	//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
+		
+	output(NETWORK_PORT).push(p);
+	click_chatter("Sent FIN, closing......");
+	
+	if (sk->recv_pending == true)
+		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
+	// chenren: send FIN ends
+	
 	// Set timer
 	sk->timer_on = true;
 	sk->teardown_waiting = true;
 	sk->teardown_expiry = Timestamp::now() + Timestamp::make_msec(_teardown_wait_ms);
 
-	if (! _timer.scheduled() || _timer.expiry() >= sk->teardown_expiry )
+	if (! _timer.scheduled() || _timer.expiry() >= sk->teardown_expiry)
 		_timer.reschedule_at(sk->teardown_expiry);
 
 	portToSock.set(_sport, sk);
@@ -1666,7 +2010,7 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 
 	sk->dst_path = dst_path;
 	sk->port = _sport;
-	sk->isConnected = true;
+	sk->isConnected = -1; // chenren: change from 1 to -1
 	sk->initialized = true;
 	sk->ddag = dest;
 	sk->seq_num = 0;
@@ -1712,7 +2056,7 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 
 	// Prepare SYN packet
 
-	//Add XIA headers
+	// Add XIA headers
 	XIAHeaderEncap xiah;
 	xiah.set_nxt(CLICK_XIA_NXT_TRN);
 	xiah.set_last(LAST_NODE_DEFAULT);
@@ -1726,7 +2070,7 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 
 	WritablePacket *p = NULL;
 
-	TransportHeaderEncap *thdr = TransportHeaderEncap::MakeSYNHeader( 0, -1, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+	TransportHeaderEncap *thdr = TransportHeaderEncap::MakeSYNHeader(0, -1, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
 
 	p = thdr->encap(just_payload_part);
 
@@ -1754,8 +2098,8 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 	// click_chatter("XCONNECT: %d: %s\n", _sport, (_local_addr.unparse()).c_str());
 	output(NETWORK_PORT).push(p);
 
-	//sk=portToSock.get(_sport);
-	//click_chatter("\nbound to %s\n",portToSock.get(_sport)->src_path.unparse().c_str());
+	// sk = portToSock.get(_sport);
+	// click_chatter("\nbound to %s\n",portToSock.get(_sport)->src_path.unparse().c_str());
 
 	// We return EINPROGRESS no matter what. If we're in non-blocking mode, the
 	// API will pass EINPROGRESS on to the app. If we're in blocking mode, the API
@@ -1794,7 +2138,7 @@ void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	if (!sk->pending_connection_buf.empty()) {
 		sock *new_sk = sk->pending_connection_buf.front();
 		new_sk->port = new_port;
-
+				
 		new_sk->seq_num = 0;
 		new_sk->ack_num = 0;
 		new_sk->send_base = 0;
@@ -1844,7 +2188,7 @@ void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 		xiah_new.set_plen(strlen(dummy));
 		//click_chatter("Sent packet to network");
 
-		TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader( 0, 0, 0, calc_recv_window(new_sk)); // #seq, #ack, length, recv_wind
+		TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader(0, 0, 0, calc_recv_window(new_sk)); // #seq, #ack, length, recv_wind
 		p = thdr_new->encap(just_payload_part);
 
 		thdr_new->update();
@@ -1852,6 +2196,12 @@ void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 
 		p = xiah_new.encap(p, false);
 		delete thdr_new;
+		
+		// chenren: enable timer for synack retransmission
+		sk->synack_pkt = copy_packet(p, sk);
+		sk->timer_on = true;
+		sk->synackack_waiting = true;
+					
 		output(NETWORK_PORT).push(p);
 
 		// Get remote DAG to return to app
@@ -1861,9 +2211,10 @@ void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	else {
 		rc = -1;
 		ec = EWOULDBLOCK;
+		ReturnResult(_sport, xia_socket_msg, rc, ec); 
 	}
 
-	ReturnResult(_sport, xia_socket_msg, rc, ec);
+	ReturnResult(_sport, xia_socket_msg, rc, ec); 
 }
 
 // note this is only going to return status for a single socket in the poll response
@@ -1997,7 +2348,7 @@ void XTRANSPORT::Xpoll(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 			// printf("port: %d, flags: %x\n", pfd_in.port(), pfd_in.flags());
 
 			// skip over ignored ports
-			if ( port <= 0) {
+			if (port <= 0) {
 				// printf("skipping ignored port\n");
 				continue;
 			}
@@ -2031,7 +2382,7 @@ void XTRANSPORT::Xpoll(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 					// see if the socket is writable
 					// FIXME should we be looking for anything else (send window, etc...)
 					if (sk->sock_type == SOCK_STREAM) {
-						if (sk->isConnected) {
+						if (sk->isConnected == 1) {
 							// printf("stream socket is connected, so setting POLLOUT: %d\n", port);
 							flags_out |= POLLOUT;
 						}
@@ -2095,8 +2446,7 @@ void XTRANSPORT::Xchangead(unsigned short _sport, xia::XSocketMsg *xia_socket_ms
 	ReturnResult(_sport, xia_socket_msg);
 }
 
-void XTRANSPORT::Xreadlocalhostaddr(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
-{
+void XTRANSPORT::Xreadlocalhostaddr(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 	// read the localhost AD and HID
 	String local_addr = _local_addr.unparse();
 	size_t AD_found_start = local_addr.find_left("AD:");
@@ -2163,15 +2513,14 @@ void XTRANSPORT::Xgetsockname(unsigned short _sport, xia::XSocketMsg *xia_socket
 
 void XTRANSPORT::Xsend(unsigned short _sport, xia::XSocketMsg *xia_socket_msg, WritablePacket *p_in) {
 	int rc = 0, ec = 0;
-	//click_chatter("Xsend on %d\n", _sport);
-
+	// click_chatter("Xsend on %d\n", _sport);
 	xia::X_Send_Msg *x_send_msg = xia_socket_msg->mutable_x_send();
 	int pktPayloadSize = x_send_msg->payload().size();
 
 	//click_chatter("pkt %s port %d", pktPayload.c_str(), _sport);
 	//click_chatter("XSEND: %d bytes from (%d)\n", pktPayloadSize, _sport);
 
-	//Find socket state
+	// Find socket state
 	sock *sk = portToSock.get(_sport);
 
 	// Make sure the socket state isn't null
@@ -2188,47 +2537,46 @@ void XTRANSPORT::Xsend(unsigned short _sport, xia::XSocketMsg *xia_socket_msg, W
 
 	// FIXME: in blocking mode, send should block until buffer space is available.
 	int numUnACKedSentPackets = sk->next_send_seqnum - sk->send_base;
-	if (rc == 0 && 
-		numUnACKedSentPackets >= sk->send_buffer_size &&  // make sure we have space in send buf
-		numUnACKedSentPackets >= sk->remote_recv_window) { // and receiver has space in recv buf
-
-//		if (numUnACKedSentPackets >= sk->send_buffer_size)
-//			printf("Not sending -- out of send buf space\n");
-//		else if (numUnACKedSentPackets >= sk->remote_recv_window)
-//			printf("Not sending -- out of recv buf space\n");
-
+	// make sure we have space in send buf and receiver has space in recv buf
+	if (rc == 0 && numUnACKedSentPackets >= sk->send_buffer_size && numUnACKedSentPackets >= sk->remote_recv_window) {
+		/*
+		if (numUnACKedSentPackets >= sk->send_buffer_size)
+			printf("Not sending -- out of send buf space\n");
+		else if (numUnACKedSentPackets >= sk->remote_recv_window)
+			printf("Not sending -- out of recv buf space\n");
+		*/
 		rc = 0; // -1;  // set to 0 for now until blocking behavior is fixed
 		ec = EAGAIN;
 	}
 
-	// If everything is OK so far, try sending
+	// if everything is OK so far, try sending
 	if (rc == 0) {
 		rc = pktPayloadSize;
 
-		//Recalculate source path
+		// Recalculate source path
 		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
 		String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse();
-		//Make source DAG _local_addr:SID
+		// Make source DAG _local_addr:SID
 		String dagstr = sk->src_path.unparse_re();
 
-		//Client Mobility...
+		// Client Mobility...
 		if (dagstr.length() != 0 && dagstr != str_local_addr) {
-			//Moved!
+			// Moved!
 			// 1. Update 'sk->src_path'
 			sk->src_path.parse_re(str_local_addr);
 		}
 
 		// Case of initial binding to only SID
-		if(sk->full_src_dag == false) {
+		if (sk->full_src_dag == false) {
 			sk->full_src_dag = true;
 			String str_local_addr = _local_addr.unparse_re();
 			XID front_xid = sk->src_path.xid(sk->src_path.destination_node());
 			String xid_string = front_xid.unparse();
-			str_local_addr = str_local_addr + " " + xid_string; //Make source DAG _local_addr:SID
+			str_local_addr = str_local_addr + " " + xid_string; // Make source DAG _local_addr:SID
 			sk->src_path.parse_re(str_local_addr);
 		}
 
-		//Add XIA headers
+		// Add XIA headers
 		XIAHeaderEncap xiah;
 		xiah.set_nxt(CLICK_XIA_NXT_TRN);
 		xiah.set_last(LAST_NODE_DEFAULT);
@@ -2243,7 +2591,7 @@ void XTRANSPORT::Xsend(unsigned short _sport, xia::XSocketMsg *xia_socket_msg, W
 
 		WritablePacket *p = NULL;
 
-		//Add XIA Transport headers
+		// Add XIA Transport headers
 		TransportHeaderEncap *thdr = TransportHeaderEncap::MakeDATAHeader(sk->next_send_seqnum, sk->ack_num, 0, calc_recv_window(sk) ); // #seq, #ack, length, recv_wind
 		p = thdr->encap(just_payload_part);
 
@@ -2261,7 +2609,6 @@ void XTRANSPORT::Xsend(unsigned short _sport, xia::XSocketMsg *xia_socket_msg, W
 			tmp->kill();
 
 		// click_chatter("XSEND: SENT DATA at (%s) seq=%d \n\n", dagstr.c_str(), daginfo->seq_num%MAX_WIN_SIZE);
-
 		sk->seq_num++;
 		sk->next_send_seqnum++;
 
@@ -2271,15 +2618,15 @@ void XTRANSPORT::Xsend(unsigned short _sport, xia::XSocketMsg *xia_socket_msg, W
 		sk->num_retransmit_tries = 0;
 		sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
 
-		if (! _timer.scheduled() || _timer.expiry() >= sk->expiry )
+		if (! _timer.scheduled() || _timer.expiry() >= sk->expiry)
 			_timer.reschedule_at(sk->expiry);
 
 		portToSock.set(_sport, sk);
 
-		//click_chatter("Sent packet to network");
+		// click_chatter("Sent packet to network");
 		XIAHeader xiah1(p);
 		String pld((char *)xiah1.payload(), xiah1.plen());
-		//click_chatter("\n\n (%s) send (timer set at %f) =%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (daginfo->expiry).doubleval(), pld.c_str(), xiah1.plen());
+		// click_chatter("\n\n (%s) send (timer set at %f) =%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (daginfo->expiry).doubleval(), pld.c_str(), xiah1.plen());
 		output(NETWORK_PORT).push(p);
 	}
 
@@ -2329,7 +2676,7 @@ void XTRANSPORT::Xsendto(unsigned short _sport, xia::XSocketMsg *xia_socket_msg,
 	}
 
 	// Case of initial binding to only SID
-	if(sk->full_src_dag == false) {
+	if (sk->full_src_dag == false) {
 		sk->full_src_dag = true;
 		String str_local_addr = _local_addr.unparse_re();
 		XID front_xid = sk->src_path.xid(sk->src_path.destination_node());
@@ -2338,8 +2685,7 @@ void XTRANSPORT::Xsendto(unsigned short _sport, xia::XSocketMsg *xia_socket_msg,
 		sk->src_path.parse_re(str_local_addr);
 	}
 
-
-	if(sk->src_path.unparse_re().length() != 0) {
+	if (sk->src_path.unparse_re().length() != 0) {
 		//Recalculate source path
 		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
 		String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse(); //Make source DAG _local_addr:SID
@@ -2484,7 +2830,6 @@ void XTRANSPORT::XrequestChunk(unsigned short _sport, xia::XSocketMsg *xia_socke
 
 			XIDtoPort.set(source_xid, _sport); //Maybe change the mapping to XID->sock?
 			addRoute(source_xid);
-
 		}
 
 		// Case of initial binding to only SID
@@ -2554,7 +2899,7 @@ void XTRANSPORT::XrequestChunk(unsigned short _sport, xia::XSocketMsg *xia_socke
 		sk->XIDtoExpiryTime.set(destination_cid, cid_req_expiry);
 		sk->XIDtoTimerOn.set(destination_cid, true);
 
-		if (! _timer.scheduled() || _timer.expiry() >= cid_req_expiry )
+		if (!_timer.scheduled() || _timer.expiry() >= cid_req_expiry)
 			_timer.reschedule_at(cid_req_expiry);
 
 		portToSock.set(_sport, sk);
@@ -2592,20 +2937,20 @@ void XTRANSPORT::XgetChunkStatus(unsigned short _sport, xia::XSocketMsg *xia_soc
 			// There is an entry
 			int status = it->second;
 
-			if(status == WAITING_FOR_CHUNK) {
+			if (status == WAITING_FOR_CHUNK) {
 				x_getchunkstatus_msg->add_status("WAITING");
-
-			} else if(status == READY_TO_READ) {
+			} 
+			else if(status == READY_TO_READ) {
 				x_getchunkstatus_msg->add_status("READY");
-
-			} else if(status == INVALID_HASH) {
+			} 
+			else if(status == INVALID_HASH) {
 				x_getchunkstatus_msg->add_status("INVALID_HASH");
-
-			} else if(status == REQUEST_FAILED) {
+			} 
+			else if(status == REQUEST_FAILED) {
 				x_getchunkstatus_msg->add_status("FAILED");
 			}
-
-		} else {
+		} 
+		else {
 			// Status query for the CID that was not requested...
 			x_getchunkstatus_msg->add_status("FAILED");
 		}

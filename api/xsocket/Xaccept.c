@@ -58,8 +58,9 @@
 ** @returns -1 on error with errno set to an error compatible with those
 ** returned by the standard accept call.
 */
-int Xaccept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
-{
+
+// send XREADYTOACCEPT type message to click, wait for pending client connection, create accept sock, send XACCEPT type message to click and receive client's address info from click
+int Xaccept(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
 	// Xaccept accepts the connection, creates new socket, and returns it.
 
 	struct sockaddr_in my_addr;
@@ -102,22 +103,18 @@ int Xaccept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 
 	allocSocketState(new_sockfd, SOCK_STREAM);
 	
-	// bind to an unused random port number
 	my_addr.sin_family = PF_INET;
 	my_addr.sin_addr.s_addr = inet_addr("127.0.0.1");
 	my_addr.sin_port = 0;
 
+	// bind to an unused random port number
 	if ((_f_bind)(new_sockfd, (const struct sockaddr *)&my_addr, sizeof(my_addr)) < 0) {
 		(_f_close)(new_sockfd);
-
 		LOGF("Error binding new socket to local port: %s", strerror(errno));
 		return -1;
 	}
 
-
-
-	// Tell click what the new socket's port is (but we'll tell click
-	// over the old socket)
+	// Tell click what the new socket's port is over the old socket
 	len = sizeof(my_addr);
 	if((_f_getsockname)(new_sockfd, (struct sockaddr *)&my_addr, &len) < 0) {
 		(_f_close)(new_sockfd);
@@ -146,7 +143,6 @@ int Xaccept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 	}
 
 	if (addr != NULL && *addrlen >= sizeof(sockaddr_x)) {
-
 		xia::X_Accept_Msg *msg = xsm.mutable_x_accept();
 		Graph g(msg->remote_dag().c_str());
 		g.fill_sockaddr((sockaddr_x*)addr);
@@ -154,8 +150,8 @@ int Xaccept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 		if (*addrlen < sizeof(sockaddr_x)) {
 			LOG("addr is not large enough to hold a sockaddr_x");
 		}
-
-	} else if (addr) {
+	} 
+	else if (addr) {
 		memset((void*)addr, 0, sizeof(sockaddr_x));
 	}
 
