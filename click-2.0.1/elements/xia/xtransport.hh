@@ -63,6 +63,7 @@ using namespace std;
 #define DEFAULT_RECV_WIN_SIZE 128
 
 #define MAX_CONNECT_TRIES	 30
+#define MAX_CLOSE_TRIES 30 // added by chenren
 #define MAX_RETRANSMIT_TRIES 100
 
 #define REQUEST_FAILED		0x00000001
@@ -326,7 +327,8 @@ class XTRANSPORT : public Element {
 	 * ========================= */
     struct sock {
     	sock(): port(0), isConnected(0), isClosed(0), initialized(false), 
-							full_src_dag(false), timer_on(false), synack_waiting(false), synackack_waiting(false),
+							full_src_dag(false), timer_on(false), synack_waiting(false), 
+							synackack_waiting(false), finack_waiting(false), finackack_waiting(false), // chenren: added 
 							dataack_waiting(false), teardown_waiting(false), 
 							send_buffer_size(DEFAULT_SEND_WIN_SIZE), 
 							recv_buffer_size(DEFAULT_RECV_WIN_SIZE), send_base(0), 
@@ -362,6 +364,8 @@ class XTRANSPORT : public Element {
 			bool isAcceptSocket;
 			bool synack_waiting;
 			bool synackack_waiting; // chenren: used for synack retransmission
+			bool finack_waiting;		// chenren: used for fin retransmission
+			bool finackack_waiting; // chenren: used for finack retransmission			
 			bool dataack_waiting;
 			bool teardown_waiting;
 
@@ -370,7 +374,7 @@ class XTRANSPORT : public Element {
 
 			int num_connect_tries; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
 			int num_retransmit_tries; // number of times to try resending data packets
-
+			int num_close_tries; // chenren: added for closing connections
 			queue<sock*> pending_connection_buf;
 			queue<xia::XSocketMsg*> pendingAccepts; // stores accept messages from API when there are no pending connections
 		
@@ -395,6 +399,8 @@ class XTRANSPORT : public Element {
 			//Vector<WritablePacket*> pkt_buf;
 			WritablePacket *syn_pkt; 
 			WritablePacket *synack_pkt; // chenren: for retransmission
+			WritablePacket *fin_pkt; 		// chenren: for retransmission
+			WritablePacket *finack_pkt; // chenren: for retransmission			
 			HashTable<XID, WritablePacket*> XIDtoCIDreqPkt;
 			HashTable<XID, Timestamp> XIDtoExpiryTime;
 			HashTable<XID, bool> XIDtoTimerOn;
@@ -406,6 +412,8 @@ class XTRANSPORT : public Element {
 			bool timer_on;
 			Timestamp expiry;
 			Timestamp teardown_expiry;
+			
+			queue<uint32_t> rto_ests; // chenren: TODO: add RTO estimation later
 
 		/* =========================================================
 		 * TCP Socket states 
@@ -546,12 +554,12 @@ class XTRANSPORT : public Element {
     
     // modify routing table
 		void addRoute(const XID &sid) {
-			String cmd=sid.unparse() + " " + String(DESTINED_FOR_LOCALHOST);
+			String cmd = sid.unparse() + " " + String(DESTINED_FOR_LOCALHOST);
 			HandlerCall::call_write(_routeTable, "add", cmd);
     }   
         
 		void delRoute(const XID &sid) {
-			String cmd= sid.unparse();
+			String cmd = sid.unparse();
 			HandlerCall::call_write(_routeTable, "remove", cmd);
     }
  
@@ -572,6 +580,8 @@ class XTRANSPORT : public Element {
 		void resize_buffer(WritablePacket* buf[], int max, int type, uint32_t old_size, uint32_t new_size, int *dgram_start, int *dgram_end);
 		void resize_send_buffer(sock *sk, uint32_t new_size);
 		void resize_recv_buffer(sock *sk, uint32_t new_size);
+		
+		
 
 		void ProcessAPIPacket(WritablePacket *p_in);
 		void ProcessNetworkPacket(WritablePacket *p_in);

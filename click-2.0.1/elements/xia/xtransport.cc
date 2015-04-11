@@ -40,7 +40,6 @@
  * 
  * Actions:
  * retransmit SYNACK; find and send FIN msg to Xsocket; add RTO for retransmission; create pending in 1873 - 1899 into syn handler
-   sk->recv_pending if is true, send error back to application; ref 2468 with a error code
  * Q: 
  * DATA: #seq = #old_seq + 1 (last ACK's #seq); #ack = #old_ack; ACK: #seq = 0; #ack = #seq of received DATA's  + 1 // http://packetlife.net/blog/2010/jun/7/understanding-tcp-sequence-acknowledgment-numbers/ 
  * how to ensure keep transmitting packets contrainsted by the window size?
@@ -217,8 +216,8 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					}
 				}
 			} 
-			// chenren: retransmit synack begins
-			if (sk->synackack_waiting == true && sk->expiry <= now) {
+			// chenren: retransmit synack, fin, finack begins
+			else if (sk->synackack_waiting == true && sk->expiry <= now) {
 				// click_chatter("Timer: synack waiting\n");
 				if (sk->num_connect_tries <= MAX_CONNECT_TRIES) {
 					click_chatter("Timer: SYNACK RETRANSMIT! \n");
@@ -250,8 +249,75 @@ void XTRANSPORT::run_timer(Timer *timer) {
 						ProcessPollEvent(_sport, POLLHUP);
 					}
 				}
-			} 			
-			// chenren: retransmit synack ends
+			}
+			else if (sk->finack_waiting == true && sk->expiry <= now) {
+				// click_chatter("Timer: synack waiting\n");
+				if (sk->num_close_tries <= MAX_CLOSE_TRIES) {
+					click_chatter("Timer: FIN RETRANSMIT! \n");
+					copy = copy_packet(sk->fin_pkt, sk); // chenren: added for retransmission
+					XIAHeader xiah(copy);
+					// click_chatter("Timer: (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (char *)xiah.payload(), xiah.plen());
+					output(NETWORK_PORT).push(copy);
+					// reset 
+					sk->timer_on = true;
+					sk->finack_waiting = true;
+					sk->expiry = now + Timestamp::make_msec(_ackdelay_ms);
+					sk->num_close_tries++;
+				} 
+				else {
+					// Stop sending the termination request & Report the failure to the application
+					sk->timer_on = false;
+					sk->finack_waiting = false;
+					/*
+					// Notify API that the connection failed
+					xia::XSocketMsg xsm;
+					//_errh->debug("Timer: Sent packet to socket with port %d", _sport);
+					xsm.set_type(xia::XCONNECT); // chenren: TODO:
+					xsm.set_sequence(0); // TODO: what should This be?
+					xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
+					connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
+					ReturnResult(_sport, &xsm);
+					*/
+					if (sk->polling) {
+						ProcessPollEvent(_sport, POLLHUP);
+					}
+				}
+			} 	
+			else if (sk->finackack_waiting == true && sk->expiry <= now) {
+				// click_chatter("Timer: synack waiting\n");
+				if (sk->num_close_tries <= MAX_CLOSE_TRIES) {
+					click_chatter("Timer: FINACK RETRANSMIT! \n");
+					copy = copy_packet(sk->finack_pkt, sk); // chenren: added for retransmission
+					XIAHeader xiah(copy);
+					// click_chatter("Timer: (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (char *)xiah.payload(), xiah.plen());
+					output(NETWORK_PORT).push(copy);
+					// reset 
+					sk->timer_on = true;
+					sk->synackack_waiting = true;
+					sk->expiry = now + Timestamp::make_msec(_ackdelay_ms);
+					sk->num_close_tries++;
+				} 
+				else {
+					// Stop sending the connection request & Report the failure to the application
+					sk->timer_on = false;
+					sk->finackack_waiting = false;
+					/*
+					// Notify API that the connection failed
+					xia::XSocketMsg xsm;
+					//_errh->debug("Timer: Sent packet to socket with port %d", _sport);
+					xsm.set_type(xia::XCONNECT);
+					xsm.set_sequence(0); // TODO: what should This be?
+					xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
+					connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
+					ReturnResult(_sport, &xsm);
+					*/
+					if (sk->polling) {
+						ProcessPollEvent(_sport, POLLHUP);
+					}
+				}
+			} 				
+			// chenren: retransmit synack, fin, finack ends
+			
 			// retransmit data packet
 			else if (sk->dataack_waiting == true && sk->expiry <= now) {
 				// adding check to see if anything was retransmitted. We can get in here with
@@ -943,7 +1009,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				new_sk->dst_path = src_path;
 				new_sk->src_path = dst_path;
 				new_sk->isConnected = -1; // chenren: pending, wait for ACK of SYNACK
-				new_sk->initialized = true;
+				new_sk->initialized = false; 
 				new_sk->nxt = LAST_NODE_DEFAULT;
 				new_sk->last = LAST_NODE_DEFAULT;
 				new_sk->hlim = HLIM_DEFAULT;
@@ -951,10 +1017,46 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				new_sk->ack_num = 0;
 				memset(new_sk->send_buffer, 0, new_sk->send_buffer_size * sizeof(WritablePacket*));
 				memset(new_sk->recv_buffer, 0, new_sk->recv_buffer_size * sizeof(WritablePacket*));
+
+				XIAHeaderEncap xiah_new;
+				xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+				xiah_new.set_last(LAST_NODE_DEFAULT);
+				xiah_new.set_hlim(HLIM_DEFAULT);
+				xiah_new.set_dst_path(new_sk->dst_path);
+				xiah_new.set_src_path(new_sk->src_path);
+
+				//printf("Xaccept src: %s\n", new_sk->src_path.unparse().c_str());
+				//printf("Xaccept dst: %s\n", new_sk->dst_path.unparse().c_str());
+
+				const char* dummy = "Connection_granted";
+				WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+				WritablePacket *p = NULL;
+
+				xiah_new.set_plen(strlen(dummy));
+				//click_chatter("Sent packet to network");
+
+				TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader(0, 0, 0, calc_recv_window(new_sk)); // #seq, #ack, length, recv_wind
+				p = thdr_new->encap(just_payload_part);
+
+				thdr_new->update();
+				xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+				p = xiah_new.encap(p, false);
+				delete thdr_new;
+				
+				// chenren: enable timer for synack retransmission
+				sk->synack_pkt = copy_packet(p, sk);
+				
+				sk->timer_on = true;
+				sk->synackack_waiting = true;
+							
+				output(NETWORK_PORT).push(p);
+		
 				//new_sk->pending_connection_buf = new queue<sock>();
 				//new_sk->pendingAccepts = new queue<xia::XSocketMsg*>();
 
-				sk->pending_connection_buf.push(new_sk);
+				//sk->pending_connection_buf.push(new_sk); // chenren: move to ACK handler
 		
 				/* 
 				 * chenren: move to ACK handling
@@ -1000,7 +1102,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			ReturnResult(_dport, &xsm);
 			
 			// chenren: send SYNACK's ACK back to server begins:
-			sk->dst_path = src_path;
+			sk->dst_path = src_path; // chenren: error potential
 
 			// Add XIA headers
 			XIAHeaderEncap xiah_new;
@@ -1057,7 +1159,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					check_for_and_handle_pending_recv(sk);
 				}
 
-				portToSock.set(_dport, sk); // TODO: chenren: why do we need this?
+				portToSock.set(_dport, sk); 
 
 				//In case of Client Mobility...	 Update 'sk->dst_path'
 				sk->dst_path = src_path;
@@ -1105,6 +1207,10 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				sk->synackack_waiting = false;
 			
 				sk->isConnected = 1;
+				sk->initialized = true;
+				sk->pending_connection_buf.push(sk); // chenren: FIXME!!! 
+				
+				click_chatter("Client and server are connected!\n");
 
 				if (sk->polling) {
 					// tell API we are writeable
@@ -1129,6 +1235,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				
 				sk->timer_on = false;
 				portToActive.set(_dport, false);
+
+				click_chatter("FINACK's ACK received! \n");
 
 				// XID source_xid = portToSock.get(_sport).xid;
 				// this check for -1 prevents a segfault cause by bad XIDs
@@ -1159,6 +1267,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				}				
 			}
 			// chenren: handler for FINACK's ACK ends
+			
 			else if (sk->isConnected == 1 && sk->isClosed == 0) {
 				HashTable<unsigned short, bool>::iterator it1;
 				it1 = portToActive.find(_dport);
@@ -1211,7 +1320,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		} 
 		// chenren: add handler for receiving FIN and FINACK begins
 		else if (thdr.pkt_info() == TransportHeader::FIN) {
-			click_chatter("FIN received, doing nothing\n");
+			click_chatter("FIN received\n");
 
 			// Set timer
 			sk->timer_on = true;
@@ -1252,9 +1361,11 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			p = xiah_new.encap(p, false);
 			delete thdr_new;
 
+			sk->fin_pkt = copy_packet(p, sk);
+
 			XIAHeader xiah1(p);
 			String pld((char *)xiah1.payload(), xiah1.plen());
-			click_chatter("FINACK received, sending SYNACK's ACK back...\n\n");
+			click_chatter("FIN received, sending FINACK back...\n\n");
 			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
 
 			output(NETWORK_PORT).push(p);			  
@@ -1263,7 +1374,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				ProcessPollEvent(_dport, POLLHUP);
 			}
 		}
-		// chenren 
 		else if (thdr.pkt_info() == TransportHeader::FINACK) {
 			sk->dst_path = src_path;
 
@@ -1275,7 +1385,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			xiah_new.set_dst_path(src_path);
 			xiah_new.set_src_path(dst_path);
 
-			const char* dummy = "SYNACK's ACK";
+			const char* dummy = "FINACK's ACK";
 			WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
 
 			WritablePacket *p = NULL;
@@ -1291,13 +1401,15 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			p = xiah_new.encap(p, false);
 			delete thdr_new;
 
+			sk->finack_pkt = copy_packet(p, sk);
+
 			XIAHeader xiah1(p);
 			String pld((char *)xiah1.payload(), xiah1.plen());
-			click_chatter("FINACK received, sending SYNACK's ACK back...\n\n");
+			click_chatter("FINACK received, sending FINACK's ACK back...\n\n");
 			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
 
 			output(NETWORK_PORT).push(p);			 
-			
+			/*
 			sk->timer_on = false;
 			portToActive.set(_dport, false);
 
@@ -1327,7 +1439,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					sk->send_buffer[i]->kill();
 					sk->send_buffer[i] = NULL;
 				}
-			}		
+			}
+			*/		
 		}	
 		// chenren: add handler for receiving FIN and FINACK ends
 		else {
@@ -1940,7 +2053,7 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 
 	xiah_new.set_plen(strlen(dummy));
 
-	TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+	TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeFINHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
 	p = thdr_new->encap(just_payload_part);
 
 	thdr_new->update();
@@ -1956,8 +2069,8 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 	output(NETWORK_PORT).push(p);
 	click_chatter("Sent FIN, closing......");
 	
-	if (sk->recv_pending == true)
-		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
+//	if (sk->recv_pending == true)
+//		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
 	// chenren: send FIN ends
 	
 	// Set timer
@@ -2169,40 +2282,6 @@ void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 		// click_chatter("XACCEPT: (%s) my_sport=%d  my_sid=%s  his_sid=%s \n\n", (_local_addr.unparse()).c_str(), _sport, source_xid.unparse().c_str(), destination_xid.unparse().c_str());
 
 		sk->pending_connection_buf.pop();
-
-		XIAHeaderEncap xiah_new;
-		xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
-		xiah_new.set_last(LAST_NODE_DEFAULT);
-		xiah_new.set_hlim(HLIM_DEFAULT);
-		xiah_new.set_dst_path(new_sk->dst_path);
-		xiah_new.set_src_path(new_sk->src_path);
-
-		//printf("Xaccept src: %s\n", new_sk->src_path.unparse().c_str());
-		//printf("Xaccept dst: %s\n", new_sk->dst_path.unparse().c_str());
-
-		const char* dummy = "Connection_granted";
-		WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
-
-		WritablePacket *p = NULL;
-
-		xiah_new.set_plen(strlen(dummy));
-		//click_chatter("Sent packet to network");
-
-		TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader(0, 0, 0, calc_recv_window(new_sk)); // #seq, #ack, length, recv_wind
-		p = thdr_new->encap(just_payload_part);
-
-		thdr_new->update();
-		xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
-
-		p = xiah_new.encap(p, false);
-		delete thdr_new;
-		
-		// chenren: enable timer for synack retransmission
-		sk->synack_pkt = copy_packet(p, sk);
-		sk->timer_on = true;
-		sk->synackack_waiting = true;
-					
-		output(NETWORK_PORT).push(p);
 
 		// Get remote DAG to return to app
 		xia::X_Accept_Msg *x_accept_msg = xia_socket_msg->mutable_x_accept();
