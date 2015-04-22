@@ -12,7 +12,7 @@
 #include "xiaxidroutetable.hh"
 #include "xiatransport.hh"
 
-#define CACHESIZE 1024*1024*1024 //only for router cache (endhost cahe is virtually unlimited, but is periodically refreshed)
+#define CACHESIZE 1024*1024*1024 //only for router cache (endhost cache is virtually unlimited, but is periodically refreshed)
 #define CLIENTCACHE
 #define PACKETSIZE 1024		
 
@@ -111,7 +111,7 @@ class XIAContentModule {
 		static const int REFRESH = 1000000;
 		int _timer;
 		HashTable<XID, int> partial;
-		HashTable<XID, int> content;   
+		HashTable<XID, int> content; // makred as 1 if full
 		Packet *makeChunkResponse(CChunk * chunk, Packet *p_in);
     Packet *makeChunkPush(CChunk * chunk, Packet *p_in);
     int MakeSpace(int);    

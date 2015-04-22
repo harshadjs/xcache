@@ -59,6 +59,7 @@ class ContentHeaderEncap : public XIAGenericExtHeaderEncap { public:
             uint32_t chunk_length, char opcode= ContentHeader::OP_RESPONSE, 
             uint32_t contextID=0, uint32_t ttl = 86400, uint32_t cacheSize=1024, uint32_t cachePolicy=0);
 
+    // chenren: used for simple case that only one packet for each chunk
     ContentHeaderEncap(uint8_t opcode, uint32_t chunk_offset=0, uint16_t length=0);
 
     static ContentHeaderEncap* MakeRequestHeader() { return new ContentHeaderEncap(ContentHeader::OP_REQUEST,0,0); };

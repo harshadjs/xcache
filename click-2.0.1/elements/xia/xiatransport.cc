@@ -92,9 +92,11 @@ void XIATransport::push(int port, Packet *p) {
 	XID dstID(__dstID);
 	XID srcID(__srcID);
 
-	if (src_xid_type == _cid_type)  //store, this is chunk response
+	// store, this is chunk response
+	if (src_xid_type == _cid_type)  
 		_content_module->cache_incoming(p, srcID, dstID, port);
-	else if(dst_xid_type==_cid_type)  //look_up,  chunk request
+	// look_up,  chunk request	
+	else if(dst_xid_type==_cid_type)  
 		_content_module->process_request(p, srcID, dstID);
 	else {
 		p->kill();

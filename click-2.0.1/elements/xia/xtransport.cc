@@ -24,7 +24,7 @@
 */
 
 /* 
- * Notes: 1. ACKheader's #ack might be wrong
+ * Notes: 1. ACKheader's #ack might be wrong: sk->next_recv_seqnum = next_missing_seqnum(sk);
  * 
  * old version
  * TransportHeaderEncap *thdr = TransportHeaderEncap::MakeSYNHeader(0, -1, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
@@ -1002,28 +1002,14 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				// TODO: 1. prepare new Daginfo and store it; 2. send SYNACK to client
 
 				// Prepare new sock for this connection
-				sock *new_sk = new sock();
-				new_sk->port = -1; // just for now. This will be updated via Xaccept call
 
-				new_sk->sock_type = SOCK_STREAM;
-				new_sk->dst_path = src_path;
-				new_sk->src_path = dst_path;
-				new_sk->isConnected = -1; // chenren: pending, wait for ACK of SYNACK
-				new_sk->initialized = false; 
-				new_sk->nxt = LAST_NODE_DEFAULT;
-				new_sk->last = LAST_NODE_DEFAULT;
-				new_sk->hlim = HLIM_DEFAULT;
-				new_sk->seq_num = 0;
-				new_sk->ack_num = 0;
-				memset(new_sk->send_buffer, 0, new_sk->send_buffer_size * sizeof(WritablePacket*));
-				memset(new_sk->recv_buffer, 0, new_sk->recv_buffer_size * sizeof(WritablePacket*));
 
 				XIAHeaderEncap xiah_new;
 				xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
 				xiah_new.set_last(LAST_NODE_DEFAULT);
 				xiah_new.set_hlim(HLIM_DEFAULT);
-				xiah_new.set_dst_path(new_sk->dst_path);
-				xiah_new.set_src_path(new_sk->src_path);
+				xiah_new.set_dst_path(sk->dst_path);
+				xiah_new.set_src_path(sk->src_path);
 
 				//printf("Xaccept src: %s\n", new_sk->src_path.unparse().c_str());
 				//printf("Xaccept dst: %s\n", new_sk->dst_path.unparse().c_str());
@@ -1036,7 +1022,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				xiah_new.set_plen(strlen(dummy));
 				//click_chatter("Sent packet to network");
 
-				TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader(0, 0, 0, calc_recv_window(new_sk)); // #seq, #ack, length, recv_wind
+				TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeSYNACKHeader(0, 0, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
 				p = thdr_new->encap(just_payload_part);
 
 				thdr_new->update();
@@ -1203,12 +1189,29 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// chenren: handler for SYNACK's ACK begins
 			if (sk->isConnected == -1) {
 				// Clear timer
+
+				sock *new_sk = new sock();
+				new_sk->port = -1; // just for now. This will be updated via Xaccept call
+
+				new_sk->sock_type = SOCK_STREAM;
+				new_sk->dst_path = src_path;
+				new_sk->src_path = dst_path;
+				//new_sk->isConnected = -1; // chenren: pending, wait for ACK of SYNACK
+				new_sk->initialized = false; 
+				new_sk->nxt = LAST_NODE_DEFAULT;
+				new_sk->last = LAST_NODE_DEFAULT;
+				new_sk->hlim = HLIM_DEFAULT;
+				new_sk->seq_num = 0;
+				new_sk->ack_num = 0;
+				memset(new_sk->send_buffer, 0, new_sk->send_buffer_size * sizeof(WritablePacket*));
+				memset(new_sk->recv_buffer, 0, new_sk->recv_buffer_size * sizeof(WritablePacket*));
+
 				sk->timer_on = false;
 				sk->synackack_waiting = false;
 			
-				sk->isConnected = 1;
-				sk->initialized = true;
-				sk->pending_connection_buf.push(sk); // chenren: FIXME!!! 
+				new_sk->isConnected = 1;
+				new_sk->initialized = true;
+				sk->pending_connection_buf.push(new_sk); // chenren: FIXME!!! 
 				
 				click_chatter("Client and server are connected!\n");
 
@@ -1468,6 +1471,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 	}
 }
 
+// for response pkt, verify it, clear the reqPkt entry in the socket, send it to upper layer if read_cid_req is true, or if store it in XIDtoCIDresponsePkt
 void XTRANSPORT::ProcessCachePacket(WritablePacket *p_in) {
  	_errh->debug("Got packet from cache");		
 
@@ -1484,7 +1488,7 @@ void XTRANSPORT::ProcessCachePacket(WritablePacket *p_in) {
 	// destination_sid.unparse().c_str(), source_cid.unparse().c_str(), dst_path.unparse().c_str(), src_path.unparse().c_str());
 	// click_chatter("dst_path: %s, src_path: %s, OPCode: %d\n", dst_path.unparse().c_str(), src_path.unparse().c_str(), ch.opcode());
 	
-	
+	// for push packet
 	if (ch.opcode() == ContentHeader::OP_PUSH) {
 		// compute the hash and verify it matches the CID
 		String hash = "CID:";
@@ -1790,8 +1794,11 @@ void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	sk->timer_on = false;
 	sk->synack_waiting = false;
 	sk->synackack_waiting = false;
+	sk->finack_waiting = false;
+	sk->finackack_waiting = false;
 	sk->dataack_waiting = false;
 	sk->num_retransmit_tries = 0;
+
 	sk->teardown_waiting = false;
 	sk->isAcceptSocket = false;
 	sk->num_connect_tries = 0; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
@@ -1909,7 +1916,7 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 		sk->nxt = LAST_NODE_DEFAULT;
 		sk->last = LAST_NODE_DEFAULT;
 		sk->hlim = hlim.get(_sport);
-		sk->isConnected = false;
+		sk->isConnected = 0;
 		sk->initialized = true;
 		sk->sdag = sdag_string;
 
@@ -2874,19 +2881,18 @@ void XTRANSPORT::XrequestChunk(unsigned short _sport, xia::XSocketMsg *xia_socke
 	int pktPayloadSize = pktPayload.length();
 
 	// send CID-Requests
-
 	for (int i = 0; i < x_requestchunk_msg->dag_size(); i++) {
 		String dest = x_requestchunk_msg->dag(i).c_str();
-		//click_chatter("CID-Request for %s  (size=%d) \n", dest.c_str(), dag_size);
-		//click_chatter("\n\n (%s) hi 3 \n\n", (_local_addr.unparse()).c_str());
+		// click_chatter("CID-Request for %s  (size=%d) \n", dest.c_str(), dag_size);
+		// click_chatter("\n\n (%s) hi 3 \n\n", (_local_addr.unparse()).c_str());
 		XIAPath dst_path;
 		dst_path.parse(dest);
 
-		//Find DAG info for this DGRAM
+		// Find DAG info for this DGRAM
 		sock *sk = portToSock.get(_sport);
 
 		if (!sk) {
-			//No local SID bound yet, so bind one
+			// No local SID bound yet, so bind one
 			sk = new sock();
 		}
 
@@ -2922,7 +2928,7 @@ void XTRANSPORT::XrequestChunk(unsigned short _sport, xia::XSocketMsg *xia_socke
 		}
 
 		if (sk->src_path.unparse_re().length() != 0) {
-			//Recalculate source path
+			// Recalculate source path
 			XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
 			String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse(); //Make source DAG _local_addr:SID
 			sk->src_path.parse(str_local_addr);
@@ -2934,7 +2940,7 @@ void XTRANSPORT::XrequestChunk(unsigned short _sport, xia::XSocketMsg *xia_socke
 
 		_errh->debug("sent packet to %s, from %s\n", dest.c_str(), sk->src_path.unparse_re().c_str());
 
-		//Add XIA headers
+		// Add XIA headers
 		XIAHeaderEncap xiah;
 		xiah.set_nxt(CLICK_XIA_NXT_CID);
 		xiah.set_last(LAST_NODE_DEFAULT);
@@ -2947,7 +2953,8 @@ void XTRANSPORT::XrequestChunk(unsigned short _sport, xia::XSocketMsg *xia_socke
 
 		WritablePacket *p = NULL;
 
-		//Add Content header
+		// Add Content header
+		// TODO: enable packetization by adding chunk 
 		ContentHeaderEncap *chdr = ContentHeaderEncap::MakeRequestHeader();
 		p = chdr->encap(just_payload_part);
 		p = xiah.encap(p, true);
@@ -2989,6 +2996,7 @@ void XTRANSPORT::XrequestChunk(unsigned short _sport, xia::XSocketMsg *xia_socke
 	ReturnResult(_sport, xia_socket_msg); // TODO: Error codes?
 }
 
+// is the status for local the chunk already local or missing??
 void XTRANSPORT::XgetChunkStatus(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 	xia::X_Getchunkstatus_Msg *x_getchunkstatus_msg = xia_socket_msg->mutable_x_getchunkstatus();
 
@@ -3012,7 +3020,7 @@ void XTRANSPORT::XgetChunkStatus(unsigned short _sport, xia::XSocketMsg *xia_soc
 		HashTable<XID, int>::iterator it;
 		it = sk->XIDtoStatus.find(destination_cid);
 
-		if(it != sk->XIDtoStatus.end()) {
+		if (it != sk->XIDtoStatus.end()) {
 			// There is an entry
 			int status = it->second;
 
@@ -3042,6 +3050,7 @@ void XTRANSPORT::XgetChunkStatus(unsigned short _sport, xia::XSocketMsg *xia_soc
 	ReturnResult(_sport, xia_socket_msg); // TODO: Error codes?
 }
 
+// read chunk from cache (through XIDtoCIDresponsePkt)
 void XTRANSPORT::XreadChunk(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 	xia::X_Readchunk_Msg *x_readchunk_msg = xia_socket_msg->mutable_x_readchunk();
 	click_chatter(">>READ chunk message from API %d\n", _sport);
@@ -3073,8 +3082,9 @@ void XTRANSPORT::XreadChunk(unsigned short _sport, xia::XSocketMsg *xia_socket_m
 		if (status != READY_TO_READ  && status != INVALID_HASH) {
 			// Do nothing
 		} 
+		// Send the buffered pkt to upper layer		
 		else {
-			// Send the buffered pkt to upper layer
+
 			sk->XIDtoReadReq.set(destination_cid, false);
 			portToSock.set(_sport, sk);
 

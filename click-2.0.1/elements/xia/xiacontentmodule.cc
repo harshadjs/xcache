@@ -88,12 +88,13 @@ Packet * XIAContentModule::makeChunkPush(CChunk * chunk, Packet *p_in) {
 	return p;
 }
 
+// chunk request, lookup at the cache, can be returned by the cache of the router (or server host or client host)
 void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID & dstCID) {
 	
 	printf("process_request - local HID: %s, src HID: %s,  Dest CID: %s\n", _transport->local_hid().unparse().c_str(), srcHID.unparse().c_str(), dstCID.unparse().c_str());
 	HashTable<XID,CChunk*>::iterator it;
 	it = _contentTable.find(dstCID);
-	
+	// temp code for some demo start
 	// simple.html vs. simple_malicious_explanation.html
 	if (malicious && strcmp(dstCID.unparse().c_str(), "CID:f85579621d88b11490773d2b6196230bd2beb7b5") == 0) {
 		// If this router is malicous, then this content 
@@ -126,6 +127,7 @@ void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID 
 
 		it = _contentTable.find(fakeCID);
 	}
+	// temp code for some demo ends
 
 #ifdef CLIENTCACHE
 	if (srcHID == _transport->local_hid()) {
@@ -171,8 +173,8 @@ void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID 
 	}
 #endif
 
-	// server, router
-	if(it != _contentTable.end()) {
+	// if found in router, create response packet, discard the request packet and 
+	if (it != _contentTable.end()) {
 		//std::cout<<"look up cache in router or server"<<std::endl;
 		XIAHeaderEncap encap;
 		XIAHeader hdr(p);
@@ -191,18 +193,18 @@ void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID 
 		encap.set_dst_path(hdr.src_path());
 		encap.set_nxt(CLICK_XIA_NXT_CID);
 
-		// add content header dataoffset
+		// add content header data offset
 		unsigned int cp = 0;
 		ContentHeaderEncap dummy_contenth(0, 0, 0, 0);
-
-		while(cp < s) {
-			uint16_t hdrsize = encap.hdr_size()+ dummy_contenth.hlen();
+		// packetization: iteratively sending each packet of the chunk
+		while (cp < s) {
+			uint16_t hdrsize = encap.hdr_size() + dummy_contenth.hlen();
 			int l = (s-cp) < (PKTSIZE - hdrsize) ? (s-cp) : (PKTSIZE - hdrsize);
 			ContentHeaderEncap  contenth(0, cp, l, s);
-			WritablePacket *newp = Packet::make(hdrsize, pl + cp , l, 20 );
-			newp=contenth.encap(newp);
+			WritablePacket *newp = Packet::make(hdrsize, pl + cp , l, 20);
+			newp = contenth.encap(newp);
 			encap.set_plen(l);
-			newp=encap.encap( newp, false );
+			newp = encap.encap(newp, false);
 			// click_chatter("Found in router cache! CID: %s, Local Address: %s\n", dstCID.unparse().c_str(),  _transport->local_hid().unparse().c_str());
 	    
 			_transport->checked_output_push(0 , newp);
@@ -219,7 +221,10 @@ void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID 
 	}
 }
 
+// router will cache the chunkresponse opportunistically; if it's complete, it will add the CID into the routing table; forward implicitly
 void XIAContentModule::cache_incoming_forward(Packet *p, const XID& srcCID) {
+	click_chatter("cache_incoming_forward called\n");    
+
 	XIAHeader xhdr(p);  // parse xia header and locate nodes and payload
 	ContentHeader ch(p);
 
@@ -228,18 +233,23 @@ void XIAContentModule::cache_incoming_forward(Packet *p, const XID& srcCID) {
 	int length = ch.length();
 	int chunkSize = ch.chunk_length();
 
-	//std::cout<<"dst is not myself"<<std::endl;
+	// std::cout<<"dst is not myself"<<std::endl;
 	HashTable<XID,CChunk*>::iterator it;
 	it = _contentTable.find(srcCID);
-	if (it != _contentTable.end()) {  //already in contentTable
+
+	// chunk is complete, already in _contentTable	
+	if (it != _contentTable.end()) {  
 		content[it->first] = 1;
 	} 
+	// incomplete chunk is placed in _partialTable temporialy
 	else {
 		it = _partialTable.find(srcCID);
-		if (it != _partialTable.end()) { //found in partialTable
+		// found in partialTable: chunk is incomplete yet		
+		if (it != _partialTable.end()) { 
 			partial[it->first] = 1;
 			CChunk *chunk = it->second;
 			chunk->fill(payload, offset, length);
+			// if chunk is complete, make the CID available for routing
 			if (chunk->full()) {
 				_contentTable[srcCID] = chunk;
 				content[srcCID] = 1;
@@ -248,15 +258,16 @@ void XIAContentModule::cache_incoming_forward(Packet *p, const XID& srcCID) {
 				_partialTable.erase(it);
 			}
 		} 
-		else {                     //first pkt of a chunk
+		// if this is the first pkt of a chunk, then make a chunk
+		else {                     
 			CChunk *chunk = new CChunk(srcCID, chunkSize);
-			chunk->fill(payload, offset, length);//  allocate space for new chunk
+			chunk->fill(payload, offset, length); // allocate space for new chunk
 			MakeSpace(chunkSize);  //lru
-
+			// if it's full, it will put the chunk into _contentTable
 			if (chunk->full()) {
 				_contentTable[srcCID] = chunk;
 				content[srcCID] = 1;
-				//modify routing table	  //add
+				// add routing table	  
 				addRoute(srcCID);
 			} 
 			else {
@@ -266,9 +277,11 @@ void XIAContentModule::cache_incoming_forward(Packet *p, const XID& srcCID) {
 			usedSize += chunkSize;
 		}
 	}
+
 	//printf("lru refresh\n");
 	//std::cout<<timer<<std::endl;
-	_timer++;
+	// expire the content
+	_timer++; // chenren: what?? timer++ every time it is accessed? 
 	if (_timer >= REFRESH) {
 		HashTable<XID,int>::iterator iter;
 		for (iter = content.begin(); iter != content.end(); iter++) {
@@ -283,7 +296,10 @@ void XIAContentModule::cache_incoming_forward(Packet *p, const XID& srcCID) {
 	//printf("end: dstHID is not myself\n");
 }
 
+// chunk response's dst HID == local HID, directly send chunk (router can only send )
 void XIAContentModule::cache_incoming_local(Packet* p, const XID& srcCID, bool local_putcid, bool pushcid) {
+	click_chatter("cache_incoming_local called\n");    
+
 	XIAHeader xhdr(p);  // parse xia header and locate nodes and payload
 	ContentHeader ch(p);
 
@@ -304,7 +320,7 @@ void XIAContentModule::cache_incoming_local(Packet* p, const XID& srcCID, bool l
 #ifdef CLIENTCACHE
 	struct cacheMeta *cacheEntry = _cacheMetaTable.get(contextID);
 
-	if(cacheEntry == NULL){
+	if (cacheEntry == NULL){
 		struct cacheMeta *cm = (struct cacheMeta *)malloc(sizeof(cacheMeta));
 		cm->curSize = 0;
 		cm->maxSize = cacheSize;
@@ -318,7 +334,8 @@ void XIAContentModule::cache_incoming_local(Packet* p, const XID& srcCID, bool l
 	HashTable<XID,CChunk*>::iterator cit;
 	_timer++;
 	cit = _contentTable.find(srcCID);
-	if (cit != _contentTable.end()) { // content exists alreaady
+	// content exists already
+	if (cit != _contentTable.end()) { 
 		// click_chatter("Found the Chunk! Push: %d Put:%d\n", pushcid, local_putcid);
 	  if (pushcid) {
 			// click_chatter("Pushing something that we already have\n");    
@@ -353,8 +370,8 @@ void XIAContentModule::cache_incoming_local(Packet* p, const XID& srcCID, bool l
 #endif
 
 	it = _partialTable.find(srcCID);
-	if (it != _partialTable.end()) { //already in partial table
-		//std::cout<<"found in partial table"<<std::endl;
+	if (it != _partialTable.end()) { 
+		//already in partial table 		//std::cout<<"found in partial table"<<std::endl;
 		chunk = it->second;
 		chunk->fill(payload, offset, length);
 		if (chunk->full()) {
@@ -551,6 +568,7 @@ const XID* XIAContentModule::findOldestContent(int contextID) {
 	return minID;
 }
 
+// remove a chunk from the cache
 void XIAContentModule::cache_incoming_remove(Packet *p, const XID& srcCID) { 
 	XIAHeader xhdr(p); 
 	ContentHeader ch(p);
@@ -578,6 +596,7 @@ void XIAContentModule::cache_incoming_remove(Packet *p, const XID& srcCID) {
 	}  
 }
 
+// only used for host cache, not for router's cache
 void XIAContentModule::cache_management() {
 	HashTable<XID,CChunk*>::iterator cit;
 	HashTable<XID,CChunk*>::iterator it;
@@ -613,7 +632,7 @@ void XIAContentModule::cache_management() {
 #endif
 }
 
-/* source ID is the content */
+// receive a chunk response, source ID is the content
 void XIAContentModule::cache_incoming(Packet *p, const XID& srcCID, const XID& dstHID, int /*port*/) {
 	XIAHeader xhdr(p);  // parse xia header and locate nodes and payload
 	ContentHeader ch(p);
@@ -623,7 +642,7 @@ void XIAContentModule::cache_incoming(Packet *p, const XID& srcCID, const XID& d
 	if (CACHE_DEBUG){
 		click_chatter("--Cache incoming--%s %s", srcCID.unparse().c_str(), _transport->local_hid().unparse().c_str());
 	}
-	//FIXME: This comparison is just wrong. dstHID that is passed is hardcoded and sometimes different types are being compared
+	// FIXME: This comparison is just wrong. dstHID that is passed is hardcoded and sometimes different types are being compared
 	if (local_putcid || dstHID == _transport->local_hid()){
 	// cache in client: if it is local putCID() then store content. Otherwise, should return the whole chunk if possible
 	// printf("cache_incoming_local - local HID: %s, Dest HID: %s\n", _transport->local_hid().unparse().c_str(), dstHID.unparse().c_str());
@@ -633,7 +652,7 @@ void XIAContentModule::cache_incoming(Packet *p, const XID& srcCID, const XID& d
 		// printf("cache_incoming_remove - local HID: %s, Dest HID: %s\n", _transport->local_hid().unparse().c_str(), dstHID.unparse().c_str());
 		cache_incoming_remove(p, srcCID);
 	}
-	else{
+	else {
 		// cache in server, router
 		// printf("cache_incoming_forward - local HID: %s, Dest HID: %s\n", _transport->local_hid().unparse().c_str(), dstHID.unparse().c_str());
 		cache_incoming_forward(p, srcCID);
@@ -713,6 +732,7 @@ CChunk::~CChunk() {
 	delete payload;
 }
 
+// used by fill
 void CChunk::Merge(CPartList::iterator it) {
 	//std::cout<<"enter Merge: offset is "<< it->offset <<std::endl;
 	CPartList::iterator post_it;
@@ -745,6 +765,7 @@ void CChunk::Merge(CPartList::iterator it) {
 	}
 }
 
+// fill the packets into the chunk
 int CChunk::fill(const unsigned char *_payload, unsigned int offset, unsigned int length) {
 	// std::cout<<"enter fill, payload is "<<_payload<<std::endl;
 	CPartList::iterator it, post_it;
