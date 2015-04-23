@@ -88,7 +88,7 @@ Packet * XIAContentModule::makeChunkPush(CChunk * chunk, Packet *p_in) {
 	return p;
 }
 
-// chunk request, lookup at the cache, can be returned by the cache of the router (or server host or client host)
+// chunk request, lookup at the cache
 void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID & dstCID) {
 	
 	printf("process_request - local HID: %s, src HID: %s,  Dest CID: %s\n", _transport->local_hid().unparse().c_str(), srcHID.unparse().c_str(), dstCID.unparse().c_str());
@@ -129,16 +129,18 @@ void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID 
 	}
 	// temp code for some demo ends
 
+// if it's the client cache already has the requested chunk, return the chunk via output[1]
 #ifdef CLIENTCACHE
 	if (srcHID == _transport->local_hid()) {
+		click_chatter("chunk request is served by local cache\n");    
 		ContentHeader ch(p);
-		if (it != _contentTable.end() && (content[dstCID] = 1) && (ch.opcode()==ContentHeader::OP_REQUEST)) { /* Filter out redundant request for RPT reliability */
+		if (it != _contentTable.end() && (content[dstCID] = 1) && (ch.opcode() == ContentHeader::OP_REQUEST)) { /* Filter out redundant request for RPT reliability */
 			XIAHeaderEncap encap;
 			XIAHeader hdr(p);
 
 			XIAPath srcPath, dstPath;
 			char* pl = it->second->GetPayload();
-			unsigned int s=it->second->GetSize();
+			unsigned int s = it->second->GetSize();
 
 			handle_t s_dummy = srcPath.add_node(XID());
 			handle_t s_cid = srcPath.add_node(dstCID);
@@ -156,7 +158,7 @@ void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID 
 
 			ContentHeaderEncap  contenth(0, 0, 0, s);
 
-			uint16_t hdrsize = encap.hdr_size()+ contenth.hlen();
+			uint16_t hdrsize = encap.hdr_size() + contenth.hlen();
 			WritablePacket *newp = Packet::make(hdrsize, pl, s, 20);
 
 			newp = contenth.encap(newp);
@@ -173,7 +175,7 @@ void XIAContentModule::process_request(Packet *p, const XID & srcHID, const XID 
 	}
 #endif
 
-	// if found in router, create response packet, discard the request packet and 
+	// if found in router or server, create response packet (requires packtization), sent it to output[0]
 	if (it != _contentTable.end()) {
 		//std::cout<<"look up cache in router or server"<<std::endl;
 		XIAHeaderEncap encap;
@@ -296,7 +298,7 @@ void XIAContentModule::cache_incoming_forward(Packet *p, const XID& srcCID) {
 	//printf("end: dstHID is not myself\n");
 }
 
-// chunk response's dst HID == local HID, directly send chunk (router can only send )
+// chunk response's dst HID == local HID, directly send the whole chunk to upper layer (xtransport's processCachePacket)
 void XIAContentModule::cache_incoming_local(Packet* p, const XID& srcCID, bool local_putcid, bool pushcid) {
 	click_chatter("cache_incoming_local called\n");    
 
