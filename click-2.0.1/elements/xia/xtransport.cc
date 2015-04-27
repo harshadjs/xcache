@@ -2022,7 +2022,7 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 	
 	// chenren: send FIN starts
 	sock *sk = portToSock.get(_sport);
-	
+	/*
 	// Recalculate source path
 	XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
 	String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse();
@@ -2045,6 +2045,7 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 		str_local_addr = str_local_addr + " " + xid_string; // Make source DAG _local_addr:SID
 		sk->src_path.parse_re(str_local_addr);
 	}
+	*/
 	// Add XIA headers
 	XIAHeaderEncap xiah_new;
 	xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
