@@ -2028,7 +2028,7 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 	
 	// chenren: send FIN starts
 	sock *sk = portToSock.get(_sport);
-	if (sk->sock_type == SOCK_DGRAM) {
+	if (sk->sock_type == SOCK_STREAM) {
 		/*
 		// Recalculate source path
 		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
