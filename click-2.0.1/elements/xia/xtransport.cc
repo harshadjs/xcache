@@ -1003,6 +1003,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 				// Prepare new sock for this connection
 
+				click_chatter("SYN received! \n");
 
 				XIAHeaderEncap xiah_new;
 				xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
@@ -1038,6 +1039,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				sk->synackack_waiting = true;
 							
 				output(NETWORK_PORT).push(p);
+				click_chatter("SYNACK sent! \n");
 		
 				//new_sk->pending_connection_buf = new queue<sock>();
 				//new_sk->pendingAccepts = new queue<xia::XSocketMsg*>();
@@ -1066,6 +1068,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// }
 		} 
 		else if (thdr.pkt_info() == TransportHeader::SYNACK) {
+			click_chatter("Received SYNACK!\n\n");			
 			// Clear timer
 			sk->timer_on = false;
 			sk->synack_waiting = false;
@@ -1116,10 +1119,11 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 			XIAHeader xiah1(p);
 			String pld((char *)xiah1.payload(), xiah1.plen());
-			click_chatter("Send SYNACK's ACK back...\n\n");
 			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
 
 			output(NETWORK_PORT).push(p);			
+			click_chatter("Send SYNACK's ACK back...\n\n");
+
 			// chenren: send ACK back to server ends
 		}
 		// put data into buffer, signal API for pulling, send ACK
@@ -1378,6 +1382,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			}
 		}
 		else if (thdr.pkt_info() == TransportHeader::FINACK) {
+			click_chatter("FINACK's ACK received!\n\n");
+
 			sk->dst_path = src_path;
 
 			// Add XIA headers
@@ -2022,61 +2028,62 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 	
 	// chenren: send FIN starts
 	sock *sk = portToSock.get(_sport);
-	/*
-	// Recalculate source path
-	XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
-	String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse();
-	// Make source DAG _local_addr:SID
-	String dagstr = sk->src_path.unparse_re();
+	if (sk->sock_type == SOCK_DGRAM) {
+		/*
+		// Recalculate source path
+		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
+		String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse();
+		// Make source DAG _local_addr:SID
+		String dagstr = sk->src_path.unparse_re();
 
-	// Client Mobility...
-	if (dagstr.length() != 0 && dagstr != str_local_addr) {
-		// Moved!
-		// 1. Update 'sk->src_path'
-		sk->src_path.parse_re(str_local_addr);
+		// Client Mobility...
+		if (dagstr.length() != 0 && dagstr != str_local_addr) {
+			// Moved!
+			// 1. Update 'sk->src_path'
+			sk->src_path.parse_re(str_local_addr);
+		}
+
+		// Case of initial binding to only SID
+		if (sk->full_src_dag == false) {
+			sk->full_src_dag = true;
+			String str_local_addr = _local_addr.unparse_re();
+			XID front_xid = sk->src_path.xid(sk->src_path.destination_node());
+			String xid_string = front_xid.unparse();
+			str_local_addr = str_local_addr + " " + xid_string; // Make source DAG _local_addr:SID
+			sk->src_path.parse_re(str_local_addr);
+		}
+		*/
+		// Add XIA headers
+		XIAHeaderEncap xiah_new;
+		xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+		xiah_new.set_last(LAST_NODE_DEFAULT);
+		xiah_new.set_hlim(HLIM_DEFAULT); // xiah.set_hlim(hlim.get(_sport));??
+		xiah_new.set_dst_path(sk->dst_path);
+		xiah_new.set_src_path(sk->src_path);
+
+		const char* dummy = "FIN";
+		WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+		WritablePacket *p = NULL;
+
+		xiah_new.set_plen(strlen(dummy));
+
+		TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeFINHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+		p = thdr_new->encap(just_payload_part);
+
+		thdr_new->update();
+		xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+		p = xiah_new.encap(p, false);
+		delete thdr_new;
+
+		XIAHeader xiah1(p);
+		String pld((char *)xiah1.payload(), xiah1.plen());
+		//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
+			
+		output(NETWORK_PORT).push(p);
+		click_chatter("Sent FIN, closing......");
 	}
-
-	// Case of initial binding to only SID
-	if (sk->full_src_dag == false) {
-		sk->full_src_dag = true;
-		String str_local_addr = _local_addr.unparse_re();
-		XID front_xid = sk->src_path.xid(sk->src_path.destination_node());
-		String xid_string = front_xid.unparse();
-		str_local_addr = str_local_addr + " " + xid_string; // Make source DAG _local_addr:SID
-		sk->src_path.parse_re(str_local_addr);
-	}
-	*/
-	// Add XIA headers
-	XIAHeaderEncap xiah_new;
-	xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
-	xiah_new.set_last(LAST_NODE_DEFAULT);
-	xiah_new.set_hlim(HLIM_DEFAULT); // xiah.set_hlim(hlim.get(_sport));??
-	xiah_new.set_dst_path(sk->dst_path);
-	xiah_new.set_src_path(sk->src_path);
-
-	const char* dummy = "FIN";
-	WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
-
-	WritablePacket *p = NULL;
-
-	xiah_new.set_plen(strlen(dummy));
-
-	TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeFINHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
-	p = thdr_new->encap(just_payload_part);
-
-	thdr_new->update();
-	xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
-
-	p = xiah_new.encap(p, false);
-	delete thdr_new;
-
-	XIAHeader xiah1(p);
-	String pld((char *)xiah1.payload(), xiah1.plen());
-	//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
-		
-	output(NETWORK_PORT).push(p);
-	click_chatter("Sent FIN, closing......");
-	
 //	if (sk->recv_pending == true)
 //		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
 	// chenren: send FIN ends
@@ -2186,7 +2193,7 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 	xiah.set_src_path(sk->src_path);
 
 	//click_chatter("Sent packet to network");
-	const char* dummy = "Connection_request";
+	const char* dummy = "Connection_request (SYN)";
 	WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 20);
 
 	WritablePacket *p = NULL;
