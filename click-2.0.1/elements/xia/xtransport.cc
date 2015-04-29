@@ -908,7 +908,7 @@ void XTRANSPORT::ProcessAPIPacket(WritablePacket *p_in) {
 void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 	// _errh->debug("Got packet from network");
 
-	//Extract the SID/CID
+	// Extract the SID (CID is dealt in ProcessCachePacket)
 	XIAHeader xiah(p_in->xia_header());
 	XIAPath dst_path = xiah.dst_path();
 	XID _destination_xid(xiah.hdr()->node[xiah.last()].xid);
@@ -921,6 +921,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 	
 	// click_chatter("NetworkPacket, Src: %s, Dest: %s", xiah.dst_path().unparse().c_str(), xiah.src_path().unparse().c_str());
 
+	// find the application port _dport based on dest_xid, which will be updated if there's already a connection based on XIDPair, then get sock
 	unsigned short _dport = XIDtoPort.get(_destination_xid);  // This is to be updated for the XSOCK_STREAM type connections below
 
 	//String pld((char *)xiah.payload(), xiah.plen());
@@ -967,6 +968,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		return;
 	} 
 	else if (thdr.type() == TransportHeader::XSOCK_STREAM) {
+		click_chatter("XSOCK_STREAM received! \n");
 
 		// some common actions for all STREAM packets
 		XIDpair xid_pair;
@@ -989,33 +991,52 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// sock *sk = portToSock.get(_dport); // TODO: check that mapping exists
 
 			// First, check if this request is already in the pending queue
-			// HashTable<XIDpair , bool>::iterator it;
-			// it = XIDpairToConnectPending.find(xid_pair);
+			HashTable<XIDpair, bool>::iterator it;
+			it = XIDpairToConnectPending.find(xid_pair);
 
 			// FIXME:
 			// XIDpairToConnectPending never gets cleared, and will cause problems if matching XIDs
 			// were used previously. Commenting out the check for now. Need to look into whether
 			// or not we can just get rid of this logic? probably neede for retransmit cases
 			// if needed, where should it be cleared???
-			// if (it == XIDpairToConnectPending.end()) {
+			if (it == XIDpairToConnectPending.end()) {
 				// if this is new request, put it in the queue
 				// TODO: 1. prepare new Daginfo and store it; 2. send SYNACK to client
 
 				// Prepare new sock for this connection
 
 				click_chatter("SYN received! \n");
+/*
+				sock *new_sk = new sock();
+				new_sk->port = -1; // just for now. This will be updated via Xaccept call
 
+				new_sk->sock_type = SOCK_STREAM;
+
+				new_sk->dst_path = src_path;
+				new_sk->src_path = dst_path;
+				new_sk->isConnected = -1;
+				new_sk->initialized = true;
+				new_sk->nxt = LAST_NODE_DEFAULT;
+				new_sk->last = LAST_NODE_DEFAULT;
+				new_sk->hlim = HLIM_DEFAULT;
+				new_sk->seq_num = 0;
+				new_sk->ack_num = 0;
+				memset(new_sk->send_buffer, 0, new_sk->send_buffer_size * sizeof(WritablePacket*));
+				memset(new_sk->recv_buffer, 0, new_sk->recv_buffer_size * sizeof(WritablePacket*));
+				//new_sk->pending_connection_buf = new queue<sock>();
+				//new_sk->pendingAccepts = new queue<xia::XSocketMsg*>();
+*/
 				XIAHeaderEncap xiah_new;
 				xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
 				xiah_new.set_last(LAST_NODE_DEFAULT);
 				xiah_new.set_hlim(HLIM_DEFAULT);
-				xiah_new.set_dst_path(sk->dst_path);
-				xiah_new.set_src_path(sk->src_path);
+				xiah_new.set_dst_path(sk->src_path);
+				xiah_new.set_src_path(sk->dst_path);
 
 				//printf("Xaccept src: %s\n", new_sk->src_path.unparse().c_str());
 				//printf("Xaccept dst: %s\n", new_sk->dst_path.unparse().c_str());
 
-				const char* dummy = "Connection_granted";
+				const char* dummy = "Connection_pending";
 				WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
 
 				WritablePacket *p = NULL;
@@ -1040,7 +1061,10 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 							
 				output(NETWORK_PORT).push(p);
 				click_chatter("SYNACK sent! \n");
-		
+
+				// Mark these src & dst XID pair
+				XIDpairToConnectPending.set(xid_pair, true);
+
 				//new_sk->pending_connection_buf = new queue<sock>();
 				//new_sk->pendingAccepts = new queue<xia::XSocketMsg*>();
 
@@ -1053,8 +1077,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					ProcessPollEvent(_dport, POLLOUT); 
 				}
 
-				// Mark these src & dst XID pair
-				XIDpairToConnectPending.set(xid_pair, true);
+
 
 				// If the app is ready for a new connection, alert it
 				if (!sk->pendingAccepts.empty()) {
@@ -1065,7 +1088,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				}
 				* chenren: move to ACK handling
 				*/
-			// }
+			}
 		} 
 		else if (thdr.pkt_info() == TransportHeader::SYNACK) {
 			click_chatter("Received SYNACK!\n\n");			
@@ -1191,16 +1214,20 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		} 
 		else if (thdr.pkt_info() == TransportHeader::ACK) {
 			// chenren: handler for SYNACK's ACK begins
-			if (sk->isConnected == -1) {
-				// Clear timer
+			// push this socket into pending_connection_buf and let Xaccept handle that
+			HashTable<XIDpair, bool>::iterator it;
+			it = XIDpairToConnectPending.find(xid_pair);
 
+			if (it != XIDpairToConnectPending.end()) {
+				// Clear timer
+				// chenren: TODO: find the way to find sk based on pair
 				sock *new_sk = new sock();
 				new_sk->port = -1; // just for now. This will be updated via Xaccept call
 
 				new_sk->sock_type = SOCK_STREAM;
 				new_sk->dst_path = src_path;
 				new_sk->src_path = dst_path;
-				//new_sk->isConnected = -1; // chenren: pending, wait for ACK of SYNACK
+				new_sk->isConnected = 1; // chenren: pending, wait for ACK of SYNACK
 				new_sk->initialized = false; 
 				new_sk->nxt = LAST_NODE_DEFAULT;
 				new_sk->last = LAST_NODE_DEFAULT;
@@ -1223,8 +1250,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					// tell API we are writeable
 					ProcessPollEvent(_dport, POLLOUT); // chenren: change from POLLOUT to POLL
 				}
-				// Mark these src & dst XID pair
-				XIDpairToConnectPending.set(xid_pair, true);
+				// finish the connection handshake
+				XIDpairToConnectPending.erase(xid_pair);
 
 				// If the app is ready for a new connection, alert it
 				if (!sk->pendingAccepts.empty()) {
@@ -1804,8 +1831,8 @@ void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	sk->finackack_waiting = false;
 	sk->dataack_waiting = false;
 	sk->num_retransmit_tries = 0;
-
 	sk->teardown_waiting = false;
+	sk->isConnected = -1; // chenren: added for client initilization	
 	sk->isAcceptSocket = false;
 	sk->num_connect_tries = 0; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
 	memset(sk->send_buffer, 0, sk->send_buffer_size * sizeof(WritablePacket*));
@@ -2265,6 +2292,11 @@ void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 
 	if (!sk->pending_connection_buf.empty()) {
 		sock *new_sk = sk->pending_connection_buf.front();
+		if(new_sk->isConnected != 1) {
+			click_chatter("Xtransport: Xaccept: ERROR: sock from pending_connection_buf !isconnected\n");
+		} else {
+			click_chatter("Xtransport: Socket on port %d is now connected\n", new_port);
+		}		
 		new_sk->port = new_port;
 				
 		new_sk->seq_num = 0;
