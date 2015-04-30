@@ -1000,6 +1000,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		if (thdr.pkt_info() == TransportHeader::SYN) {
 			// click_chatter("Connection request from client... syn dport = %d\n", _dport);		
 			// sock *sk = portToSock.get(_dport); // TODO: check that mapping exists
+			click_chatter("SYN received! \n");
 
 			// First, check if this request is already in the pending queue
 			HashTable<XIDpair, bool>::iterator it;
@@ -1013,10 +1014,9 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				// if this is new request, put it in the queue
 				// TODO: 1. prepare new Daginfo and store it; 2. send SYNACK to client
 
+				click_chatter("Never seen this SYN before! \n");
 				// Prepare new sock for this connection
 
-				click_chatter("SYN received! \n");
-				
 				XIAHeaderEncap xiah_new;
 				xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
 				xiah_new.set_last(LAST_NODE_DEFAULT);
@@ -1219,8 +1219,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 			if (it != XIDpairToConnectPending.end()) {
 				click_chatter("Receives the ACK of SYNACK.\n");				
-				// Clear timer
-				// chenren: TODO: find the way to find sk based on pair
 				sock *new_sk = new sock();
 				new_sk->port = -1; // just for now. This will be updated via Xaccept call
 
@@ -1237,11 +1235,13 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				memset(new_sk->send_buffer, 0, new_sk->send_buffer_size * sizeof(WritablePacket*));
 				memset(new_sk->recv_buffer, 0, new_sk->recv_buffer_size * sizeof(WritablePacket*));
 
+				// Clear timer
 				sk->timer_on = false;
 				sk->synackack_waiting = false;
 			
 				new_sk->isConnected = 1;
 				new_sk->initialized = true;
+				click_chatter("Push into pending_connection_buf at %ld.\n", Timestamp::now());								
 				sk->pending_connection_buf.push(new_sk); 
 
 				if (sk->polling) {
@@ -1263,42 +1263,45 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			
 			// chenren: handler for FINACK's ACK starts
 			else if (sk->isConnected == 1 && sk->isClosed == -1) {
-				click_chatter("ACK of FINACK received! \n");
-				sk->isClosed = 1;
-				sk->finackack_waiting = false;				
-				sk->timer_on = false;
-				sk->teardown_waiting = false;				
-				portToActive.set(_dport, false);
+				click_chatter("ACK of FINACK received on port %d! \n", sk->port);
+				if (sk) {
+					click_chatter("Cleaning the state start...\n");
+					sk->finackack_waiting = false;				
+					sk->timer_on = false;
+					sk->teardown_waiting = false;				
+					portToActive.set(_dport, false);
 
-				// XID source_xid = portToSock.get(_sport).xid;
-				// this check for -1 prevents a segfault cause by bad XIDs
-				// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
-				// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
-				// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
-				
-				if (sk->src_path.destination_node() != -1) {
-					XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
-					if (!sk->isAcceptSocket) {
-						//click_chatter("deleting route %s from port %d\n", source_xid.unparse().c_str(), _sport);
-						delRoute(source_xid);
-						XIDtoPort.erase(source_xid);
+					// XID source_xid = portToSock.get(_sport).xid;
+					// this check for -1 prevents a segfault cause by bad XIDs
+					// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
+					// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
+					// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
+					
+					if (sk->src_path.destination_node() != -1) {
+						XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
+						if (!sk->isAcceptSocket) {
+							click_chatter("deleting route %s from port %d\n", source_xid.unparse().c_str(), _dport);
+							delRoute(source_xid);
+							XIDtoPort.erase(source_xid);
+						}
 					}
-				}
+					click_chatter("Cleaning the state: before delete sk with port %d\n", _dport);
+					delete sk;
+					click_chatter("Cleaning the state: after delete sk\n");
+					portToSock.erase(_dport);
+					portToActive.erase(_dport);
+					hlim.erase(_dport);
 
-				delete sk;
-				
-				portToSock.erase(_dport);
-				portToActive.erase(_dport);
-				hlim.erase(_dport);
-
-				nxt_xport.erase(_dport);
-				xcmp_listeners.remove(_dport);
-				for (int i = 0; i < sk->send_buffer_size; i++) {
-					if (sk->send_buffer[i] != NULL) {
-						sk->send_buffer[i]->kill();
-						sk->send_buffer[i] = NULL;
-					}
-				}						
+					nxt_xport.erase(_dport);
+					xcmp_listeners.remove(_dport);
+					for (int i = 0; i < sk->send_buffer_size; i++) {
+						if (sk->send_buffer[i] != NULL) {
+							sk->send_buffer[i]->kill();
+							sk->send_buffer[i] = NULL;
+						}
+					}	
+					click_chatter("Cleaning the state: ending...\n");					
+				}					
 			}
 			// chenren: handler for FINACK's ACK ends
 			
@@ -1355,6 +1358,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		} 
 		// chenren: add handler for receiving FIN and FINACK begins
 		else if (thdr.pkt_info() == TransportHeader::FIN) {
+			// prevent it from sending FIN after receiving FINACK
+			sk->isClosed = -1;	
 			// Set timer
 			sk->timer_on = true;
 			sk->teardown_waiting = true;
@@ -1407,11 +1412,10 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 			XIAHeader xiah1(p);
 			String pld((char *)xiah1.payload(), xiah1.plen());
-			click_chatter("FIN received, sending FINACK back...\n");
+			click_chatter("FIN received on port %d, sending FINACK back...\n", sk->port);
 			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
 
-			output(NETWORK_PORT).push(p);
-			sk->isClosed = -1;		
+			output(NETWORK_PORT).push(p);	
 			// tell API we had an error			
 			if (sk->polling) {
 				ProcessPollEvent(_dport, POLLHUP);
@@ -1453,38 +1457,41 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 			output(NETWORK_PORT).push(p);			 
 			
-			sk->timer_on = false;
-			sk->teardown_waiting = false;
-			portToActive.set(_dport, false);
+			if (sk) {
+				click_chatter("Cleaning the state\n");
+				sk->timer_on = false;
+				sk->teardown_waiting = false;
+				portToActive.set(_dport, false);
 
-			// XID source_xid = portToSock.get(_sport).xid;
-			// this check for -1 prevents a segfault cause by bad XIDs
-			// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
-			// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
-			// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
+				// XID source_xid = portToSock.get(_sport).xid;
+				// this check for -1 prevents a segfault cause by bad XIDs
+				// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
+				// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
+				// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
 
-			if (sk->src_path.destination_node() != -1) {
-				XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
-				if (!sk->isAcceptSocket) {
-					//click_chatter("deleting route %s from port %d\n", source_xid.unparse().c_str(), _sport);
-					delRoute(source_xid);
-					XIDtoPort.erase(source_xid);
+				if (sk->src_path.destination_node() != -1) {
+					XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
+					if (!sk->isAcceptSocket) {
+						click_chatter("deleting route %s from port %d\n", source_xid.unparse().c_str(), _dport);
+						delRoute(source_xid);
+						XIDtoPort.erase(source_xid);
+					}
 				}
-			}
 
-			delete sk;
-			portToSock.erase(_dport);
-			portToActive.erase(_dport);
-			hlim.erase(_dport);
+				delete sk;
+				portToSock.erase(_dport);
+				portToActive.erase(_dport);
+				hlim.erase(_dport);
 
-			nxt_xport.erase(_dport);
-			xcmp_listeners.remove(_dport);
-			for (int i = 0; i < sk->send_buffer_size; i++) {
-				if (sk->send_buffer[i] != NULL) {
-					sk->send_buffer[i]->kill();
-					sk->send_buffer[i] = NULL;
-				}
-			}			
+				nxt_xport.erase(_dport);
+				xcmp_listeners.remove(_dport);
+				for (int i = 0; i < sk->send_buffer_size; i++) {
+					if (sk->send_buffer[i] != NULL) {
+						sk->send_buffer[i]->kill();
+						sk->send_buffer[i] = NULL;
+					}
+				}		
+			}	
 		}	
 		// chenren: add handler for receiving FIN and FINACK ends
 		else {
@@ -2063,7 +2070,8 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 	
 	// chenren: send FIN starts
 	sock *sk = portToSock.get(_sport);
-	if (sk->sock_type == SOCK_STREAM) {
+	// Xclose is called only if it never receives FIN
+	if (sk->sock_type == SOCK_STREAM && sk->isClosed == 0) {
 		/*
 		// Recalculate source path
 		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
@@ -2301,15 +2309,16 @@ void XTRANSPORT::XreadyToAccept(unsigned short _sport, xia::XSocketMsg *xia_sock
 
 void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 	int rc = 0, ec = 0;
-	
+	click_chatter("Enter Xaccept at %ld!\n", Timestamp::now());
+
 	unsigned short new_port = xia_socket_msg->x_accept().new_port();
 	sock *sk = portToSock.get(_sport);
 
 	hlim.set(new_port, HLIM_DEFAULT);
 	nxt_xport.set(new_port, CLICK_XIA_NXT_TRN);
-
 	if (!sk->pending_connection_buf.empty()) {
 		sock *new_sk = sk->pending_connection_buf.front();
+		click_chatter("Get front element from and assign port number %d.", new_port);
 		if(new_sk->isConnected != 1) {
 			click_chatter("Xtransport: Xaccept: ERROR: sock from pending_connection_buf !isconnected\n");
 		} else {
