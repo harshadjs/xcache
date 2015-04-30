@@ -1296,6 +1296,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
 				// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
 				// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
+				/*
 				if (sk->src_path.destination_node() != -1) {
 					XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
 					if (!sk->isAcceptSocket) {
@@ -1304,7 +1305,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 						XIDtoPort.erase(source_xid);
 					}
 				}
-
+*/
 				delete sk;
 				
 				portToSock.erase(_dport);
@@ -1322,6 +1323,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			}
 			// chenren: handler for FINACK's ACK ends
 			
+			// chenren: data ACK
 			else if (sk->isConnected == 1 && sk->isClosed == 0) {
 				HashTable<unsigned short, bool>::iterator it1;
 				it1 = portToActive.find(_dport);
@@ -1481,6 +1483,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
 			// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
 			// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
+
+			/*
 			if (sk->src_path.destination_node() != -1) {
 				XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
 				if (!sk->isAcceptSocket) {
@@ -1489,7 +1493,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					XIDtoPort.erase(source_xid);
 				}
 			}
-
+*/
 			delete sk;
 			portToSock.erase(_dport);
 			portToActive.erase(_dport);
@@ -2147,7 +2151,7 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 			
 		output(NETWORK_PORT).push(p);
 		click_chatter("Sent FIN, closing......");
-		sk->isClosed = 1;		
+		sk->isClosed = -1;		
 	}
 //	if (sk->recv_pending == true)
 //		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
