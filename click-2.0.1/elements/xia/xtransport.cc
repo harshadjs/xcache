@@ -217,8 +217,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 				}
 			} 
 			// chenren: retransmit synack, fin, finack begins
-			else if (sk->synackack_waiting == true && sk->expiry <= now) {
-				// click_chatter("Timer: synack waiting\n");
+			else if (sk->synackack_waiting == true && sk->synackack_expiry <= now) {
 				if (sk->num_connect_tries <= MAX_CONNECT_TRIES) {
 					click_chatter("Timer: SYNACK RETRANSMIT! \n");
 					copy = copy_packet(sk->synack_pkt, sk); // chenren: added for retransmission
@@ -228,7 +227,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					// reset 
 					sk->timer_on = true;
 					sk->synackack_waiting = true;
-					sk->expiry = now + Timestamp::make_msec(_ackdelay_ms);
+					sk->synackack_expiry = now + Timestamp::make_msec(_ackdelay_ms);
 					sk->num_connect_tries++;
 				} 
 				else {
@@ -250,7 +249,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					}
 				}
 			}
-			else if (sk->finack_waiting == true && sk->expiry <= now) {
+			else if (sk->finack_waiting == true && sk->finack_expiry <= now) {
 				// click_chatter("Timer: synack waiting\n");
 				if (sk->num_close_tries <= MAX_CLOSE_TRIES) {
 					click_chatter("Timer: FIN RETRANSMIT! \n");
@@ -261,7 +260,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					// reset 
 					sk->timer_on = true;
 					sk->finack_waiting = true;
-					sk->expiry = now + Timestamp::make_msec(_ackdelay_ms);
+					sk->finack_expiry = now + Timestamp::make_msec(_ackdelay_ms);
 					sk->num_close_tries++;
 				} 
 				else {
@@ -283,7 +282,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					}
 				}
 			} 	
-			else if (sk->finackack_waiting == true && sk->expiry <= now) {
+			else if (sk->finackack_waiting == true && sk->finackack_expiry <= now) {
 				// click_chatter("Timer: synack waiting\n");
 				if (sk->num_close_tries <= MAX_CLOSE_TRIES) {
 					click_chatter("Timer: FINACK RETRANSMIT! \n");
@@ -294,7 +293,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					// reset 
 					sk->timer_on = true;
 					sk->synackack_waiting = true;
-					sk->expiry = now + Timestamp::make_msec(_ackdelay_ms);
+					sk->finackack_expiry = now + Timestamp::make_msec(_ackdelay_ms);
 					sk->num_close_tries++;
 				} 
 				else {
@@ -1067,8 +1066,17 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				delete thdr_new;
 				
 				// chenren: enable timer for synack retransmission
+				// Set timer
+				sk->timer_on = true;
+				sk->synackack_waiting = true;
+				sk->synackack_expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+
+				if (! _timer.scheduled() || _timer.expiry() >= sk->synackack_expiry)
+					_timer.reschedule_at(sk->synackack_expiry);
+
+				// Store the syn packet for potential retransmission
 				sk->synack_pkt = copy_packet(p, sk);
-				
+
 				sk->timer_on = true;
 				sk->synackack_waiting = true;
 							
@@ -1278,7 +1286,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			else if (sk->isConnected == 1 && sk->isClosed == -1) {
 				click_chatter("ACK of FINACK received! \n");
 				sk->isClosed = 1;
-				
+				sk->finackack_waiting = false;				
 				sk->timer_on = false;
 				sk->teardown_waiting = false;				
 				portToActive.set(_dport, false);
@@ -1405,7 +1413,16 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			p = xiah_new.encap(p, false);
 			delete thdr_new;
 
-			sk->fin_pkt = copy_packet(p, sk);
+			// Set timer
+			sk->timer_on = true;
+			sk->finackack_waiting = true;
+			sk->finackack_expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+
+			if (! _timer.scheduled() || _timer.expiry() >= sk->finackack_expiry)
+				_timer.reschedule_at(sk->finackack_expiry);
+
+			// Store the syn packet for potential retransmission
+			sk->finack_pkt = copy_packet(p, sk);
 
 			XIAHeader xiah1(p);
 			String pld((char *)xiah1.payload(), xiah1.plen());
@@ -1422,6 +1439,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		else if (thdr.pkt_info() == TransportHeader::FINACK) {
 
 			sk->dst_path = src_path;
+			sk->finack_waiting = false;
 
 			// Add XIA headers
 			XIAHeaderEncap xiah_new;
@@ -1446,8 +1464,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 			p = xiah_new.encap(p, false);
 			delete thdr_new;
-
-			sk->finack_pkt = copy_packet(p, sk);
 
 			XIAHeader xiah1(p);
 			String pld((char *)xiah1.payload(), xiah1.plen());
@@ -2113,6 +2129,17 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 
 		p = xiah_new.encap(p, false);
 		delete thdr_new;
+
+		// Set timer
+		sk->timer_on = true;
+		sk->finack_waiting = true;
+		sk->finack_expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+
+		if (! _timer.scheduled() || _timer.expiry() >= sk->finack_expiry)
+			_timer.reschedule_at(sk->finack_expiry);
+
+		// Store the syn packet for potential retransmission
+		sk->fin_pkt = copy_packet(p, sk);
 
 		XIAHeader xiah1(p);
 		String pld((char *)xiah1.payload(), xiah1.plen());
