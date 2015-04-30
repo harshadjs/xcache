@@ -1413,7 +1413,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
 
 			output(NETWORK_PORT).push(p);		
-			//	chenren: commmented out, suspected here calls the Xclose from the server  
 			// tell API we had an error			
 			if (sk->polling) {
 				ProcessPollEvent(_dport, POLLHUP);
@@ -1452,7 +1451,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 			XIAHeader xiah1(p);
 			String pld((char *)xiah1.payload(), xiah1.plen());
-			click_chatter("FINACK received, sending ACK of FINACK back...\n\n");
+			click_chatter("FINACK received, sending ACK of FINACK back...\n");
 			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
 
 			output(NETWORK_PORT).push(p);			 
