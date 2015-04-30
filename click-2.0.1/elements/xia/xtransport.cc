@@ -1016,27 +1016,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				// Prepare new sock for this connection
 
 				click_chatter("SYN received! \n");
-/*
-				sock *new_sk = new sock();
-				new_sk->port = -1; // just for now. This will be updated via Xaccept call
-
-				new_sk->sock_type = SOCK_STREAM;
-
-				new_sk->dst_path = src_path;
-				new_sk->src_path = dst_path;
-				new_sk->isConnected = -1;
-				new_sk->initialized = true;
-				new_sk->nxt = LAST_NODE_DEFAULT;
-				new_sk->last = LAST_NODE_DEFAULT;
-				new_sk->hlim = HLIM_DEFAULT;
-				new_sk->seq_num = 0;
-				new_sk->ack_num = 0;
-				memset(new_sk->send_buffer, 0, new_sk->send_buffer_size * sizeof(WritablePacket*));
-				memset(new_sk->recv_buffer, 0, new_sk->recv_buffer_size * sizeof(WritablePacket*));
-				//new_sk->pending_connection_buf = new queue<sock>();
-				//new_sk->pendingAccepts = new queue<xia::XSocketMsg*>();
-*/
-
 				
 				XIAHeaderEncap xiah_new;
 				xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
@@ -1296,7 +1275,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
 				// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
 				// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
-				/*
+				
 				if (sk->src_path.destination_node() != -1) {
 					XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
 					if (!sk->isAcceptSocket) {
@@ -1305,7 +1284,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 						XIDtoPort.erase(source_xid);
 					}
 				}
-*/
+
 				delete sk;
 				
 				portToSock.erase(_dport);
@@ -1484,7 +1463,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
 			// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
 
-			/*
 			if (sk->src_path.destination_node() != -1) {
 				XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
 				if (!sk->isAcceptSocket) {
@@ -1493,7 +1471,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					XIDtoPort.erase(source_xid);
 				}
 			}
-*/
+
 			delete sk;
 			portToSock.erase(_dport);
 			portToActive.erase(_dport);
@@ -2151,7 +2129,6 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 			
 		output(NETWORK_PORT).push(p);
 		click_chatter("Sent FIN, closing......");
-		sk->isClosed = -1;		
 	}
 //	if (sk->recv_pending == true)
 //		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
