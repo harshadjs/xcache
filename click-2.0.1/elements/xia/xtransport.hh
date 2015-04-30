@@ -410,9 +410,12 @@ class XTRANSPORT : public Element {
 			uint32_t seq_num;
 			uint32_t ack_num;
 			bool timer_on;
-			Timestamp expiry;
+			Timestamp expiry; // chenren: used for syn packet retransmission
 			Timestamp teardown_expiry;
-			
+			Timestamp synackack_expiry; // chenren: added
+			Timestamp finack_expiry; // chenren: added
+			Timestamp finackack_expiry; // chenren: added
+
 			queue<uint32_t> rto_ests; // chenren: TODO: add RTO estimation later
 
 		/* =========================================================
