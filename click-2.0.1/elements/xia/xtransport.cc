@@ -363,7 +363,6 @@ void XTRANSPORT::run_timer(Timer *timer) {
 				tear_down = true;
 				sk->timer_on = false;
 				portToActive.set(_sport, false);
-
 				// XID source_xid = portToSock.get(_sport).xid;
 				// this check for -1 prevents a segfault cause by bad XIDs
 				// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
@@ -1277,12 +1276,12 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			
 			// chenren: handler for FINACK's ACK starts
 			else if (sk->isConnected == 1 && sk->isClosed == -1) {
+				click_chatter("ACK of FINACK received! \n");
 				sk->isClosed = 1;
 				
 				sk->timer_on = false;
+				sk->teardown_waiting = false;				
 				portToActive.set(_dport, false);
-
-				click_chatter("ACK of FINACK received! \n");
 
 				// XID source_xid = portToSock.get(_sport).xid;
 				// this check for -1 prevents a segfault cause by bad XIDs
@@ -1299,6 +1298,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				}
 
 				delete sk;
+				
 				portToSock.erase(_dport);
 				portToActive.erase(_dport);
 				hlim.erase(_dport);
@@ -1310,7 +1310,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 						sk->send_buffer[i]->kill();
 						sk->send_buffer[i] = NULL;
 					}
-				}				
+				}						
 			}
 			// chenren: handler for FINACK's ACK ends
 			
@@ -1412,12 +1412,12 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			click_chatter("FIN received, sending FINACK back...\n");
 			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
 
-			output(NETWORK_PORT).push(p);		
+			output(NETWORK_PORT).push(p);
+			sk->isClosed = -1;		
 			// tell API we had an error			
 			if (sk->polling) {
 				ProcessPollEvent(_dport, POLLHUP);
 			}
-			
 		}
 		else if (thdr.pkt_info() == TransportHeader::FINACK) {
 
@@ -1455,8 +1455,9 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
 
 			output(NETWORK_PORT).push(p);			 
-			/*
+			
 			sk->timer_on = false;
+			sk->teardown_waiting = false;
 			portToActive.set(_dport, false);
 
 			// XID source_xid = portToSock.get(_sport).xid;
@@ -1485,8 +1486,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					sk->send_buffer[i]->kill();
 					sk->send_buffer[i] = NULL;
 				}
-			}
-			*/		
+			}			
 		}	
 		// chenren: add handler for receiving FIN and FINACK ends
 		else {
@@ -2120,6 +2120,7 @@ void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) 
 			
 		output(NETWORK_PORT).push(p);
 		click_chatter("Sent FIN, closing......");
+		sk->isClosed = 1;		
 	}
 //	if (sk->recv_pending == true)
 //		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
