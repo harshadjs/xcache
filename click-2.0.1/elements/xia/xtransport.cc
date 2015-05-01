@@ -1123,11 +1123,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			sk->synack_waiting = false;
 
 			sk->isConnected = 1; // chenren
-			// warning: client don't check isConnected status, which seems to be a bug
-			if (sk->polling) {
-				// tell API we are writble now
-				ProcessPollEvent(_dport, POLLOUT);
-			}
 
 			//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
 
@@ -1173,11 +1168,15 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 			output(NETWORK_PORT).push(p);			
 			click_chatter("Send ACK of SYNACK back...\n");
-
+			// warning: client don't check isConnected status, which seems to be a bug
+			if (sk->polling) {
+				// tell API we are writble now
+				ProcessPollEvent(_dport, POLLOUT);
+			}	
 			// chenren: send ACK back to server ends
 		}
 		// put data into buffer, signal API for pulling, send ACK
-		else if (thdr.pkt_info() == TransportHeader::DATA && _dport > 0) {
+		else if (thdr.pkt_info() == TransportHeader::DATA) {
 			if (sk) {
 				sk->remote_recv_window = thdr.recv_window();
 				//printf("(%s) my_sport=%u  my_sid=%s  his_sid=%s\n", (_local_addr.unparse()).c_str(),  _dport,  _destination_xid.unparse().c_str(), _source_xid.unparse().c_str());
@@ -1272,7 +1271,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				sk->synackack_waiting = false;
 
 				sk->pending_connection_buf.push(new_sk); 
-				click_chatter("Push into pending_connection_buf at %ld.\n", Timestamp::now());								
+				click_chatter("Push into pending_connection_buf at %ld.\n", Timestamp::now());					
+				//click_chatter("Push into pending_connection_buf at %ld.\n", Timestamp::now());								
 											
 				// finish the connection handshake
 				XIDpairToConnectPending.erase(xid_pair);
@@ -1534,6 +1534,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		}	
 		// chenren: add handler for receiving FIN and FINACK ends
 		else {
+			// chenren: mostly data packet arrives before the accept port is ready to receive
 			click_chatter("UNKNOWN dport = %d hdr=%d\n", _dport, thdr.pkt_info());
 		}
 	} 
