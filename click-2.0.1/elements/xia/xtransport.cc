@@ -1018,11 +1018,12 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 //		if (thdr.recv_window() == 0)
 //			click_chatter("received STREAM packet on port %u;   recv window = %u\n", _dport, thdr.recv_window());
 
+/*
 		if (_dport) {
 		click_chatter("before sk->remote_recv_window = thdr.recv_window()\n");												
 		sk->remote_recv_window = thdr.recv_window();
 		click_chatter("after sk->remote_recv_window = thdr.recv_window()\n");												
-
+*/
 		if (thdr.pkt_info() == TransportHeader::SYN) {
 			// click_chatter("Connection request from client... syn dport = %d\n", _dport);		
 			// sock *sk = portToSock.get(_dport); // TODO: check that mapping exists
@@ -1116,11 +1117,12 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		} 
 		else if (thdr.pkt_info() == TransportHeader::SYNACK) {
 			click_chatter("Received SYNACK!\n");			
+			sk->remote_recv_window = thdr.recv_window(); // chenren
 			// Clear timer
 			sk->timer_on = false;
 			sk->synack_waiting = false;
 
-			sk->isConnected = 1;
+			sk->isConnected = 1; // chenren
 			// warning: client don't check isConnected status, which seems to be a bug
 			if (sk->polling) {
 				// tell API we are writble now
@@ -1175,68 +1177,71 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// chenren: send ACK back to server ends
 		}
 		// put data into buffer, signal API for pulling, send ACK
-		else if (thdr.pkt_info() == TransportHeader::DATA) {
-			//printf("(%s) my_sport=%u  my_sid=%s  his_sid=%s\n", (_local_addr.unparse()).c_str(),  _dport,  _destination_xid.unparse().c_str(), _source_xid.unparse().c_str());
-			HashTable<unsigned short, bool>::iterator it1;
-			it1 = portToActive.find(_dport);
+		else if (thdr.pkt_info() == TransportHeader::DATA && _dport > 0) {
+			if (sk) {
+				sk->remote_recv_window = thdr.recv_window();
+				//printf("(%s) my_sport=%u  my_sid=%s  his_sid=%s\n", (_local_addr.unparse()).c_str(),  _dport,  _destination_xid.unparse().c_str(), _source_xid.unparse().c_str());
+				HashTable<unsigned short, bool>::iterator it1;
+				it1 = portToActive.find(_dport);
 
-			if (it1 != portToActive.end()) {
+				if (it1 != portToActive.end()) {
 
-				// buffer data, if we have room
-				if (should_buffer_received_packet(p_in, sk)) {
-					// printf("<<< add_packet_to_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", sk->port, sk->recv_base, sk->next_recv_seqnum, sk->recv_buffer_size);
-					add_packet_to_recv_buf(p_in, sk);
-					sk->next_recv_seqnum = next_missing_seqnum(sk);
-					// TODO: update recv window
-					// printf(">>> add_packet_to_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", sk->port, sk->recv_base, sk->next_recv_seqnum, sk->recv_buffer_size);
+					// buffer data, if we have room
+					if (should_buffer_received_packet(p_in, sk)) {
+						// printf("<<< add_packet_to_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", sk->port, sk->recv_base, sk->next_recv_seqnum, sk->recv_buffer_size);
+						add_packet_to_recv_buf(p_in, sk);
+						sk->next_recv_seqnum = next_missing_seqnum(sk);
+						// TODO: update recv window
+						// printf(">>> add_packet_to_recv_buf: port=%u, recv_base=%d, next_recv_seqnum=%d, recv_buf_size=%d\n", sk->port, sk->recv_base, sk->next_recv_seqnum, sk->recv_buffer_size);
 
-					if (sk->polling) {
-						// tell API we are readable
-						ProcessPollEvent(_dport, POLLIN);
+						if (sk->polling) {
+							// tell API we are readable
+							ProcessPollEvent(_dport, POLLIN);
+						}
+						check_for_and_handle_pending_recv(sk);
 					}
-					check_for_and_handle_pending_recv(sk);
+
+					portToSock.set(_dport, sk); 
+
+					//In case of Client Mobility...	 Update 'sk->dst_path'
+					sk->dst_path = src_path;
+
+					// send the cumulative ACK to the sender
+					// Add XIA headers
+					XIAHeaderEncap xiah_new;
+					xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+					xiah_new.set_last(LAST_NODE_DEFAULT);
+					xiah_new.set_hlim(HLIM_DEFAULT);
+					xiah_new.set_dst_path(src_path);
+					xiah_new.set_src_path(dst_path);
+
+					const char* dummy = "cumulative_ACK";
+					WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+					WritablePacket *p = NULL;
+
+					xiah_new.set_plen(strlen(dummy));
+
+					TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+					p = thdr_new->encap(just_payload_part);
+
+					thdr_new->update();
+					xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+					p = xiah_new.encap(p, false);
+					delete thdr_new;
+
+					XIAHeader xiah1(p);
+					String pld((char *)xiah1.payload(), xiah1.plen());
+					//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
+
+					output(NETWORK_PORT).push(p);
+					click_chatter("Sent a DATA ACK in port %d ...\n", _dport);				
+				} 
+				else {
+					click_chatter("destination port not found: %d\n", _dport);
 				}
-
-				portToSock.set(_dport, sk); 
-
-				//In case of Client Mobility...	 Update 'sk->dst_path'
-				sk->dst_path = src_path;
-
-				// send the cumulative ACK to the sender
-				// Add XIA headers
-				XIAHeaderEncap xiah_new;
-				xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
-				xiah_new.set_last(LAST_NODE_DEFAULT);
-				xiah_new.set_hlim(HLIM_DEFAULT);
-				xiah_new.set_dst_path(src_path);
-				xiah_new.set_src_path(dst_path);
-
-				const char* dummy = "cumulative_ACK";
-				WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
-
-				WritablePacket *p = NULL;
-
-				xiah_new.set_plen(strlen(dummy));
-
-				TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeACKHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
-				p = thdr_new->encap(just_payload_part);
-
-				thdr_new->update();
-				xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
-
-				p = xiah_new.encap(p, false);
-				delete thdr_new;
-
-				XIAHeader xiah1(p);
-				String pld((char *)xiah1.payload(), xiah1.plen());
-				//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
-
-				output(NETWORK_PORT).push(p);
-				click_chatter("Sent a DATA ACK in port %d ...\n", _dport);				
-			} 
-			else {
-				click_chatter("destination port not found: %d\n", _dport);
-			}
+			} // chenren
 		} 
 		else if (thdr.pkt_info() == TransportHeader::ACK) {
 			// chenren: handler for SYNACK's ACK begins
@@ -1268,12 +1273,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 
 				sk->pending_connection_buf.push(new_sk); 
 				click_chatter("Push into pending_connection_buf at %ld.\n", Timestamp::now());								
-
-				if (sk->polling) {
-					// tell API we are writeable
-					ProcessPollEvent(_dport, POLLOUT); // chenren: change from POLLOUT to POLL
-				}
-				click_chatter("Done with ProcessPollEvent(_dport, POLLOUT)\n");												
+											
 				// finish the connection handshake
 				XIDpairToConnectPending.erase(xid_pair);
 
@@ -1285,7 +1285,11 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					sk->pendingAccepts.pop();
 					delete acceptXSM;
 				}
-
+				if (sk->polling) {
+					// tell API we are writeable
+					ProcessPollEvent(_dport, POLLOUT); // chenren: change from POLLOUT to POLL
+				}
+				click_chatter("Done with ProcessPollEvent(_dport, POLLOUT)\n");	
 			}
 			// chenren: handler for SYNACK's ACK ends
 			
@@ -1335,54 +1339,59 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			
 			// chenren: data ACK
 			else if (sk->isConnected == 1 && sk->isClosed == 0) {
-				click_chatter("Receives the ACK of DATA.\n");								
-				HashTable<unsigned short, bool>::iterator it1;
-				it1 = portToActive.find(_dport);
+				click_chatter("Receives the ACK of DATA.\n");
+				// chenren
+				if (sk) {
+					sk->remote_recv_window = thdr.recv_window();
 
-				if (it1 != portToActive.end()) {
-					//In case of Client Mobility...	 Update 'sk->dst_path'
-					sk->dst_path = src_path;
+					HashTable<unsigned short, bool>::iterator it1;
+					it1 = portToActive.find(_dport);
 
-					int remote_next_seqnum_expected = thdr.ack_num();
+					if (it1 != portToActive.end()) {
+						//In case of Client Mobility...	 Update 'sk->dst_path'
+						sk->dst_path = src_path;
 
-					bool resetTimer = false;
+						int remote_next_seqnum_expected = thdr.ack_num();
 
-					// Clear all Acked packets
-					for (int i = sk->send_base; i < remote_next_seqnum_expected; i++) {
-						int idx = i % sk->send_buffer_size;
-						if (sk->send_buffer[idx]) {
-							sk->send_buffer[idx]->kill();
-							sk->send_buffer[idx] = NULL;
+						bool resetTimer = false;
+
+						// Clear all Acked packets
+						for (int i = sk->send_base; i < remote_next_seqnum_expected; i++) {
+							int idx = i % sk->send_buffer_size;
+							if (sk->send_buffer[idx]) {
+								sk->send_buffer[idx]->kill();
+								sk->send_buffer[idx] = NULL;
+							}
+							resetTimer = true;
 						}
-						resetTimer = true;
-					}
 
-					// Update the variables
-					sk->send_base = remote_next_seqnum_expected;
+						// Update the variables
+						sk->send_base = remote_next_seqnum_expected;
 
-					// Reset timer
-					if (resetTimer) {
-						sk->timer_on = true;
-						sk->dataack_waiting = true;
-						// FIXME: should we reset retransmit_tries here?
-						sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+						// Reset timer
+						if (resetTimer) {
+							sk->timer_on = true;
+							sk->dataack_waiting = true;
+							// FIXME: should we reset retransmit_tries here?
+							sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
 
-						if (!_timer.scheduled() || _timer.expiry() >= sk->expiry)
-							_timer.reschedule_at(sk->expiry);
+							if (!_timer.scheduled() || _timer.expiry() >= sk->expiry)
+								_timer.reschedule_at(sk->expiry);
 
-						if (sk->send_base == sk->next_send_seqnum) {
-							// Clear timer
-							sk->timer_on = false;
-							sk->dataack_waiting = false;
-							sk->num_retransmit_tries = 0;
-							//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+							if (sk->send_base == sk->next_send_seqnum) {
+								// Clear timer
+								sk->timer_on = false;
+								sk->dataack_waiting = false;
+								sk->num_retransmit_tries = 0;
+								//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+							}
 						}
+						portToSock.set(_dport, sk);
 					}
-					portToSock.set(_dport, sk);
-				}
-				else {
-					//click_chatter("port not found\n");
-				}
+					else {
+						//click_chatter("port not found\n");
+					}
+				} // chenren
 			}
 		} 
 		// chenren: add handler for receiving FIN and FINACK begins
@@ -1527,7 +1536,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		else {
 			click_chatter("UNKNOWN dport = %d hdr=%d\n", _dport, thdr.pkt_info());
 		}
-		}	// end of if (_dport)
 	} 
 	else if (thdr.type() == TransportHeader::XSOCK_DGRAM) {
 
