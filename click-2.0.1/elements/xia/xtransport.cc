@@ -922,8 +922,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 	// find the application port _dport based on dest_xid, which will be updated if there's already a connection based on XIDPair, then get sock
 	unsigned short _dport = XIDtoPort.get(_destination_xid);  // This is to be updated for the XSOCK_STREAM type connections below
 
-	click_chatter("Listening port is %d\n", _dport);
-
 	//String pld((char *)xiah.payload(), xiah.plen());
 	//click_chatter("\n\n 1. (%s) Received=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah.plen());
 
@@ -981,14 +979,25 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		it_temp = XIDpairToConnectPending.find(xid_pair);
 		// if it's a SYN or an ACK of SYNACK, then dport is listening port, otherwise updated to the accept port
 		if (thdr.pkt_info() == TransportHeader::SYN) {
-			click_chatter("It's SYN, still listen port \n");
+			click_chatter("It's SYN from listening port %d\n", _dport);
+
 		}	
 		else if ((thdr.pkt_info() == TransportHeader::ACK && it_temp != XIDpairToConnectPending.end())) { 
-			click_chatter("It's ACK of SYNACK, still listen port \n");
+			click_chatter("It's ACK of SYNACK from listening port %d\n", _dport);
 		}
 		else {
 			_dport = XIDpairToPort.get(xid_pair);		
 			click_chatter("Update dport to %d\n", _dport);	
+		}
+
+		if (thdr.pkt_info() == TransportHeader::DATA) {
+			click_chatter("It's a DATA with SID %s from port %d.\n", _source_xid.unparse().c_str(), _dport);	
+		}
+		else if (thdr.pkt_info() == TransportHeader::ACK ) {
+			click_chatter("It's a ACK with SID %s from port %d.\n", _source_xid.unparse().c_str(), _dport);	
+		}
+		else if (thdr.pkt_info() == TransportHeader::FIN) {
+			click_chatter("It's a FIN with SID %s from port %d.\n", _source_xid.unparse().c_str(), _dport);	
 		}
 
 		/*
@@ -1003,16 +1012,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		}
 		else {
 			click_chatter("sk not exist.\n");	
-		}
-
-		if (thdr.pkt_info() == TransportHeader::DATA) {
-			click_chatter("It's a DATA with SID %s from port %d.\n", _source_xid.unparse().c_str(), _dport);	
-		}
-		else if (thdr.pkt_info() == TransportHeader::ACK ) {
-			click_chatter("It's a ACK with SID %s from port %d.\n", _source_xid.unparse().c_str(), _dport);	
-		}
-		else if (thdr.pkt_info() == TransportHeader::FIN) {
-			click_chatter("It's a FIN with SID %s from port %d.\n", _source_xid.unparse().c_str(), _dport);	
 		}
 	
 		// update remote recv window
@@ -1121,6 +1120,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			sk->timer_on = false;
 			sk->synack_waiting = false;
 
+			sk->isConnected = 1;
 			// warning: client don't check isConnected status, which seems to be a bug
 			if (sk->polling) {
 				// tell API we are writble now
@@ -1253,7 +1253,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				new_sk->dst_path = src_path;
 				new_sk->src_path = dst_path;
 				new_sk->isConnected = 1; // chenren: pending, wait for ACK of SYNACK
-				new_sk->initialized = false; 
+				new_sk->initialized = true; 
 				new_sk->nxt = LAST_NODE_DEFAULT;
 				new_sk->last = LAST_NODE_DEFAULT;
 				new_sk->hlim = HLIM_DEFAULT;
@@ -1265,9 +1265,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				// Clear timer
 				sk->timer_on = false;
 				sk->synackack_waiting = false;
-			
-				new_sk->isConnected = 1;
-				new_sk->initialized = true;
+
 				sk->pending_connection_buf.push(new_sk); 
 				click_chatter("Push into pending_connection_buf at %ld.\n", Timestamp::now());								
 
@@ -1489,7 +1487,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			output(NETWORK_PORT).push(p);			 
 			
 			if (sk) {
-				click_chatter("Cleaning the state\n");
+				click_chatter("Cleaning the state based on receiving FINACK starts\n");
 				sk->timer_on = false;
 				sk->teardown_waiting = false;
 				portToActive.set(_dport, false);
@@ -1521,7 +1519,8 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 						sk->send_buffer[i] = NULL;
 					}
 				}		
-				delete sk;				
+				delete sk;		
+				click_chatter("Cleaning the state based on receiving FINACK ends\n");		
 			}	
 		}	
 		// chenren: add handler for receiving FIN and FINACK ends
