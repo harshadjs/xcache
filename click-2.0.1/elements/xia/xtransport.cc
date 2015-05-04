@@ -179,6 +179,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 
 		// reset the concurrent poll flag so we know we can return a result to the next poll request
 		sk->did_poll = false;
+		click_chatter("Port: %d, timer_on: %d, now: %ld, dataack_waiting: %d, expiry: %ld, teardown_waiting: %ld, teardown_expiry: %ld\n", _sport, sk->timer_on, now/1000, sk->dataack_waiting, sk->expiry/1000, sk->teardown_waiting, sk->teardown_expiry/1000);
 
 		// check if pending
 		if (sk->timer_on == true) {
@@ -216,6 +217,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					}
 				}
 			} 
+/*
 			// chenren: retransmit synack, fin, finack begins
 			else if (sk->synackack_waiting == true && sk->synackack_expiry <= now) {
 				if (sk->num_connect_tries <= MAX_CONNECT_TRIES) {
@@ -249,6 +251,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					}
 				}
 			}
+
 			else if (sk->finack_waiting == true && sk->finack_expiry <= now) {
 				click_chatter("Timer: finack waiting\n");
 				if (sk->num_close_tries <= MAX_CLOSE_TRIES) {
@@ -268,7 +271,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					sk->timer_on = false;
 					sk->finack_waiting = false;
 					click_chatter("Turn off timer because sk->num_close_tries > MAX_CLOSE_TRIES\n");										
-					/*
+					
 					// Notify API that the connection failed
 					xia::XSocketMsg xsm;
 					//_errh->debug("Timer: Sent packet to socket with port %d", _sport);
@@ -277,7 +280,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
 					connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
 					ReturnResult(_sport, &xsm);
-					*/
+					
 					if (sk->polling) {
 						ProcessPollEvent(_sport, POLLHUP);
 					}
@@ -303,7 +306,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					sk->finackack_waiting = false;
 					click_chatter("Turn off timer because sk->num_close_tries > MAX_CLOSE_TRIES\n");										
 
-					/*
+					
 					// Notify API that the connection failed
 					xia::XSocketMsg xsm;
 					//_errh->debug("Timer: Sent packet to socket with port %d", _sport);
@@ -312,12 +315,13 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
 					connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
 					ReturnResult(_sport, &xsm);
-					*/
+					
 					if (sk->polling) {
 						ProcessPollEvent(_sport, POLLHUP);
 					}
 				}
-			} 				
+			}
+*/ 				
 			// chenren: retransmit synack, fin, finack ends
 			
 			// retransmit data packet
@@ -365,7 +369,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 			else if (sk->teardown_waiting == true && sk->teardown_expiry <= now) {
 				tear_down = true;
 				sk->timer_on = false;
-				click_chatter("sk->timer_on = false because sk->teardown_waiting == true\n");					
+				click_chatter("Turn off the timer because sk->teardown_waiting == true with port = %d\n", _sport);					
 				portToActive.set(_sport, false);
 				// XID source_xid = portToSock.get(_sport).xid;
 				// this check for -1 prevents a segfault cause by bad XIDs
@@ -401,9 +405,11 @@ void XTRANSPORT::run_timer(Timer *timer) {
 			// find the (next) earlist expiry
 			if (sk->timer_on == true && sk->expiry > now && (sk->expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
 				earlist_pending_expiry = sk->expiry;
+				click_chatter("earlist_pending_expiry = sk->expiry\n");
 			}
 			if (sk->timer_on == true && sk->teardown_expiry > now && (sk->teardown_expiry < earlist_pending_expiry || earlist_pending_expiry == now ) ) {
 				earlist_pending_expiry = sk->teardown_expiry;
+				click_chatter("earlist_pending_expiry = sk->teardown_expiry\n");
 			}
 
 			// check for CID request cases
@@ -439,6 +445,10 @@ void XTRANSPORT::run_timer(Timer *timer) {
 		}
 	}
 
+	// Set the next timer
+	if (earlist_pending_expiry > now) {
+		_timer.reschedule_at(earlist_pending_expiry);
+	}
 	// pthread_mutex_unlock(&_lock);
 }
 
@@ -990,9 +1000,9 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			click_chatter("It's ACK of SYNACK with SID %s from listening port %d at %ld\n", _source_xid.unparse().c_str(), _dport, Timestamp::now());
 		}
 		else {
-			click_chatter("port was %d\n", _dport);
+			click_chatter("XIDtoPort -> port was %d\n", _dport);
 			_dport = XIDpairToPort.get(xid_pair);	
-			click_chatter("port now %d\n", _dport);			
+			click_chatter("XIDpairToPort -> port is now %d\n", _dport);			
 			/*
 			click_chatter("%ld.\n", Timestamp::now());
 			if (_dport == 0 && thdr.pkt_info() == TransportHeader::DATA) {
@@ -1004,11 +1014,15 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			click_chatter("Update dport to %d at %ld\n", _dport, Timestamp::now());	
 		}
 
+		
 		if (thdr.pkt_info() == TransportHeader::DATA) {
 			click_chatter("It's a DATA with %s from port %d at %ld.\n", _source_xid.unparse().c_str(), _dport, Timestamp::now());	
 		}
 		else if (thdr.pkt_info() == TransportHeader::ACK ) {
 			click_chatter("It's a ACK with %s from port %d at %ld.\n", _source_xid.unparse().c_str(), _dport, Timestamp::now());	
+		}
+		else if (thdr.pkt_info() == TransportHeader::SYNACK ) {
+			click_chatter("It's a SYNACK with %s from port %d at %ld.\n", _source_xid.unparse().c_str(), _dport, Timestamp::now());	
 		}
 		else if (thdr.pkt_info() == TransportHeader::FIN) {
 			click_chatter("It's a FIN with %s from port %d at %ld.\n", _source_xid.unparse().c_str(), _dport, Timestamp::now());	
@@ -1137,7 +1151,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// Clear timer
 			sk->timer_on = false;
 			sk->synack_waiting = false;
-			click_chatter("sk->timer_on = false because receive the SYNACK\n");
+			click_chatter("Turn off the timer because receiving the SYNACK\n");
 			sk->isConnected = 1; // chenren
 
 			//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
@@ -1152,8 +1166,6 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			ReturnResult(_dport, &xsm);
 			
 			// chenren: send SYNACK's ACK back to server begins:
-			sk->dst_path = src_path; // chenren: error potential
-
 			// Add XIA headers
 			XIAHeaderEncap xiah_new;
 			xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
@@ -1272,7 +1284,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				new_sk->sock_type = SOCK_STREAM;
 				new_sk->dst_path = src_path;
 				new_sk->src_path = dst_path;
-				new_sk->isConnected = 1; // chenren: pending, wait for ACK of SYNACK
+				new_sk->isConnected = 1; // chenren
 				new_sk->initialized = true; 
 				new_sk->nxt = LAST_NODE_DEFAULT;
 				new_sk->last = LAST_NODE_DEFAULT;
@@ -1316,7 +1328,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 					sk->timer_on = false;
 					sk->teardown_waiting = false;				
 					portToActive.set(_dport, false);
-
+					click_chatter("Turn off the timer because receiving the FINACK\n");
 					// XID source_xid = portToSock.get(_sport).xid;
 					// this check for -1 prevents a segfault cause by bad XIDs
 					// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
@@ -1515,7 +1527,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				sk->timer_on = false;
 				sk->teardown_waiting = false;
 				portToActive.set(_dport, false);
-
+				click_chatter("Turn off the timer because receiving the FINACK");
 				// XID source_xid = portToSock.get(_sport).xid;
 				// this check for -1 prevents a segfault cause by bad XIDs
 				// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
@@ -1905,6 +1917,7 @@ void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	sk->isConnected = -1; // chenren: added for client initilization	
 	sk->isAcceptSocket = false;
 	sk->num_connect_tries = 0; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
+	sk->num_close_tries = 0; // chenren: added
 	memset(sk->send_buffer, 0, sk->send_buffer_size * sizeof(WritablePacket*));
 	memset(sk->recv_buffer, 0, sk->recv_buffer_size * sizeof(WritablePacket*));
 	//sk->pending_connection_buf = new queue<sock>();
@@ -2829,17 +2842,20 @@ void XTRANSPORT::Xsend(unsigned short _sport, xia::XSocketMsg *xia_socket_msg, W
 		sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
 		click_chatter("DATA retransmission is scheduled at %ld\n", sk->expiry);
 
-		if (! _timer.scheduled() || _timer.expiry() >= sk->expiry)
+		if (! _timer.scheduled() || _timer.expiry() >= sk->expiry) {
 			_timer.reschedule_at(sk->expiry);
-		click_chatter("DATA retransmission schedule might changed to %ld\n", sk->expiry);
+			click_chatter("DATA retransmission schedule might changed to %ld\n", sk->expiry);
+		}
+
 		portToSock.set(_sport, sk);
 
 		// click_chatter("Sent packet to network");
 		XIAHeader xiah1(p);
 		String pld((char *)xiah1.payload(), xiah1.plen());
 		// click_chatter("\n\n (%s) send (timer set at %f) =%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (daginfo->expiry).doubleval(), pld.c_str(), xiah1.plen());
-		output(NETWORK_PORT).push(p);
-		click_chatter("Sent DATA at %ld...\n", Timestamp::now());		
+		//output(NETWORK_PORT).push(p);
+		//click_chatter("Sent DATA at %ld...\n", Timestamp::now());		
+		click_chatter("Exit Xsend() function with the sk->timer_on = %d and dataack_waiting = %d\n", sk->timer_on, sk->dataack_waiting);
 	}
 
 	x_send_msg->clear_payload(); // clear payload before returning result

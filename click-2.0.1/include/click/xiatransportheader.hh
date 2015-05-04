@@ -67,7 +67,7 @@ class TransportHeaderEncap : public XIAGenericExtHeaderEncap {
                             
     static TransportHeaderEncap* MakeACKHeader( uint32_t seq_num, uint32_t ack_num, uint16_t length, uint32_t recv_window ) 
                         { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, TransportHeader::ACK, seq_num, ack_num, length, recv_window); };
-                        
+		// chenren: added MakeFINHeader and MakeFINACKHeader                 
     static TransportHeaderEncap* MakeFINHeader( uint32_t seq_num, uint32_t ack_num, uint16_t length, uint32_t recv_window ) 
                         { return new TransportHeaderEncap(TransportHeader::XSOCK_STREAM, TransportHeader::FIN, seq_num, ack_num, length, recv_window); };
                         

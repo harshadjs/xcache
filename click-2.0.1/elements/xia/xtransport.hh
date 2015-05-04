@@ -326,7 +326,7 @@ class XTRANSPORT : public Element {
 	 * Socket states
 	 * ========================= */
     struct sock {
-    	sock(): port(0), isConnected(0), isClosed(0), initialized(false), 
+    	sock(): port(0), isConnected(0), isClosed(0), initialized(false), // chenren: changed isConnected and isclosed from false to 0
 							full_src_dag(false), timer_on(false), synack_waiting(false), 
 							synackack_waiting(false), finack_waiting(false), finackack_waiting(false), // chenren: added 
 							dataack_waiting(false), teardown_waiting(false), 
@@ -359,7 +359,7 @@ class XTRANSPORT : public Element {
 		 * ========================= */
 
 			int isConnected; 	// chenren: change bool to int; {-1,0,1} represents pending, closed and connected
-			int	isClosed; 		// chenren: {-1,0,1} represents pending, connected and closed 
+			int	isClosed; 		// chenren: added: {-1,0,1} represents pending, connected and closed 
 			bool initialized;
 			bool isAcceptSocket;
 			bool synack_waiting;
