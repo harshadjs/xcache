@@ -217,7 +217,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					}
 				}
 			} 
-/*
+
 			// chenren: retransmit synack, fin, finack begins
 			else if (sk->synackack_waiting == true && sk->synackack_expiry <= now) {
 				if (sk->num_connect_tries <= MAX_CONNECT_TRIES) {
@@ -275,7 +275,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					// Notify API that the connection failed
 					xia::XSocketMsg xsm;
 					//_errh->debug("Timer: Sent packet to socket with port %d", _sport);
-					xsm.set_type(xia::XCONNECT); // chenren: TODO:
+					xsm.set_type(xia::XCONNECT); // chenren: TODO: Dan: what it should do? as as finackack
 					xsm.set_sequence(0); // TODO: what should This be?
 					xia::X_Connect_Msg *connect_msg = xsm.mutable_x_connect();
 					connect_msg->set_status(xia::X_Connect_Msg::XFAILED);
@@ -321,7 +321,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					}
 				}
 			}
-*/ 				
+ 				
 			// chenren: retransmit synack, fin, finack ends
 			
 			// retransmit data packet
@@ -343,11 +343,41 @@ void XTRANSPORT::run_timer(Timer *timer) {
 						}
 					}
 				} 
-				// chenren: TODO: what if exceeds the max data retransmission
 				else {
 					//click_chatter("retransmit counter exceeded\n");
 					// should we do a NAK?
- 
+					// chenren: close the connection for now
+					tear_down = true;
+					sk->timer_on = false;
+					click_chatter("Turn off the timer because sk->teardown_waiting == true with port = %d\n", _sport);					
+					portToActive.set(_sport, false);
+					// XID source_xid = portToSock.get(_sport).xid;
+					// this check for -1 prevents a segfault cause by bad XIDs
+					// it may happen in other cases, but opening a XSOCK_STREAM socket, calling
+					// XreadLocalHostAddr and then closing the socket without doing anything else will cause the problem
+					// TODO: make sure that -1 is the only condition that will cause us to get a bad XID
+					if (sk->src_path.destination_node() != -1) {
+						XID source_xid = sk->src_path.xid(sk->src_path.destination_node());
+						if (!sk->isAcceptSocket) {
+							click_chatter("Tear down: deleting route %s from port %d\n", source_xid.unparse().c_str(), _sport);
+							delRoute(source_xid);
+							XIDtoPort.erase(source_xid);
+						}
+					}
+
+					portToSock.erase(_sport);
+					portToActive.erase(_sport);
+					hlim.erase(_sport);
+
+					nxt_xport.erase(_sport);
+					xcmp_listeners.remove(_sport);
+					for (int i = 0; i < sk->send_buffer_size; i++) {
+						if (sk->send_buffer[i] != NULL) {
+							sk->send_buffer[i]->kill();
+							sk->send_buffer[i] = NULL;
+						}
+					}
+					delete sk;						
 				}
 
 				if (retransmit_sent) {
@@ -2853,8 +2883,8 @@ void XTRANSPORT::Xsend(unsigned short _sport, xia::XSocketMsg *xia_socket_msg, W
 		XIAHeader xiah1(p);
 		String pld((char *)xiah1.payload(), xiah1.plen());
 		// click_chatter("\n\n (%s) send (timer set at %f) =%s  len=%d \n\n", (_local_addr.unparse()).c_str(), (daginfo->expiry).doubleval(), pld.c_str(), xiah1.plen());
-		//output(NETWORK_PORT).push(p);
-		//click_chatter("Sent DATA at %ld...\n", Timestamp::now());		
+		output(NETWORK_PORT).push(p);
+		click_chatter("Sent DATA at %ld...\n", Timestamp::now());		
 		click_chatter("Exit Xsend() function with the sk->timer_on = %d and dataack_waiting = %d\n", sk->timer_on, sk->dataack_waiting);
 	}
 
