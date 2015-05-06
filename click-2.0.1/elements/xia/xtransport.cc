@@ -368,7 +368,7 @@ void XTRANSPORT::run_timer(Timer *timer) {
 					portToSock.erase(_sport);
 					portToActive.erase(_sport);
 					hlim.erase(_sport);
-
+					//
 					nxt_xport.erase(_sport);
 					xcmp_listeners.remove(_sport);
 					for (int i = 0; i < sk->send_buffer_size; i++) {
@@ -377,6 +377,16 @@ void XTRANSPORT::run_timer(Timer *timer) {
 							sk->send_buffer[i] = NULL;
 						}
 					}
+					for (int i = 0; i < sk->recv_buffer_size; i++) {
+						if (sk->recv_buffer[i] != NULL) {
+							sk->recv_buffer[i]->kill();
+							sk->recv_buffer[i] = NULL;
+						}
+					}			
+					delete sk->syn_pkt; 
+					delete sk_>synack_pkt; // chenren: for retransmission
+					delete sk->fin_pkt; 		// chenren: for retransmission
+					delete sk->finack_pkt; // chenren: for retransmission							
 					delete sk;						
 				}
 
@@ -1182,7 +1192,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			sk->timer_on = false;
 			sk->synack_waiting = false;
 			click_chatter("Turn off the timer because receiving the SYNACK\n");
-			sk->isConnected = 1; // chenren
+			sk->isConnected = CONNECTED; // chenren
 
 			//sk->expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
 
@@ -1314,7 +1324,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 				new_sk->sock_type = SOCK_STREAM;
 				new_sk->dst_path = src_path;
 				new_sk->src_path = dst_path;
-				new_sk->isConnected = 1; // chenren
+				new_sk->isConnected = CONNECTED; // chenren
 				new_sk->initialized = true; 
 				new_sk->nxt = LAST_NODE_DEFAULT;
 				new_sk->last = LAST_NODE_DEFAULT;
@@ -1350,7 +1360,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// chenren: handler for SYNACK's ACK ends
 			
 			// chenren: handler for FINACK's ACK starts
-			else if (sk->isConnected == 1 && sk->isClosed == -1) {
+			else if (sk->isConnected == CONNECTED && sk->isClosed == CLOSING) {
 				click_chatter("ACK of FINACK received on port %d! \n", sk->port);
 				if (sk) {
 					//click_chatter("Cleaning the state start...\n");
@@ -1394,7 +1404,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 			// chenren: handler for FINACK's ACK ends
 			
 			// chenren: data ACK
-			else if (sk->isConnected == 1 && sk->isClosed == 0) {
+			else if (sk->isConnected == CONNECTED && sk->isClosed == NOTCLOSED) {
 				click_chatter("Receives the ACK of DATA.\n");
 				// chenren
 				if (sk) {
@@ -1454,7 +1464,7 @@ void XTRANSPORT::ProcessNetworkPacket(WritablePacket *p_in) {
 		// chenren: add handler for receiving FIN and FINACK begins
 		else if (thdr.pkt_info() == TransportHeader::FIN) {
 			// prevent it from sending FIN after receiving FINACK
-			sk->isClosed = -1;	
+			sk->isClosed = CLOSING;	
 			// Set timer
 			sk->timer_on = true;
 			sk->teardown_waiting = true;
@@ -1944,7 +1954,8 @@ void XTRANSPORT::Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	sk->dataack_waiting = false;
 	sk->num_retransmit_tries = 0;
 	sk->teardown_waiting = false;
-	sk->isConnected = -1; // chenren: added for client initilization	
+	sk->isConnected = CONNECTING; // chenren: added for client initilization	
+	sk->isClosed = NOTCLOSED; // chenren: added for client initialization
 	sk->isAcceptSocket = false;
 	sk->num_connect_tries = 0; // number of xconnect tries (Xconnect will fail after MAX_CONNECT_TRIES trials)
 	sk->num_close_tries = 0; // chenren: added
@@ -2062,7 +2073,7 @@ void XTRANSPORT::Xbind(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 		sk->nxt = LAST_NODE_DEFAULT;
 		sk->last = LAST_NODE_DEFAULT;
 		sk->hlim = hlim.get(_sport);
-		sk->isConnected = 0;
+		sk->isConnected = NOTCONNECTED;
 		sk->initialized = true;
 		sk->sdag = sdag_string;
 
@@ -2122,7 +2133,7 @@ void XTRANSPORT::XbindPush(unsigned short _sport, xia::XSocketMsg *xia_socket_ms
 		sk->nxt = LAST_NODE_DEFAULT;
 		sk->last = LAST_NODE_DEFAULT;
 		sk->hlim = hlim.get(_sport);
-		sk->isConnected = false;
+		sk->isConnected = NOTCONNECTED;
 		sk->initialized = true;
 		sk->sdag = sdag_string;
 
@@ -2164,95 +2175,98 @@ void XTRANSPORT::XbindPush(unsigned short _sport, xia::XSocketMsg *xia_socket_ms
 }
 
 void XTRANSPORT::Xclose(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
-	// click_chatter("Xclose: closing %d\n", _sport);
+	click_chatter("Xclose: closing %d\n", _sport);
 	
 	// chenren: send FIN starts
 	sock *sk = portToSock.get(_sport);
-	// Xclose is called only if it never receives FIN
-	if (sk->sock_type == SOCK_STREAM && sk->isClosed == 0) {
-		/*
-		// Recalculate source path
-		XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
-		String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse();
-		// Make source DAG _local_addr:SID
-		String dagstr = sk->src_path.unparse_re();
+	if (sk) {
+		// Xclose is called only if it never receives FIN
+		if (sk->sock_type == SOCK_STREAM && sk->isClosed == NOTCLOSED) {
+			/*
+			// Recalculate source path
+			XID	source_xid = sk->src_path.xid(sk->src_path.destination_node());
+			String str_local_addr = _local_addr.unparse_re() + " " + source_xid.unparse();
+			// Make source DAG _local_addr:SID
+			String dagstr = sk->src_path.unparse_re();
 
-		// Client Mobility...
-		if (dagstr.length() != 0 && dagstr != str_local_addr) {
-			// Moved!
-			// 1. Update 'sk->src_path'
-			sk->src_path.parse_re(str_local_addr);
+			// Client Mobility...
+			if (dagstr.length() != 0 && dagstr != str_local_addr) {
+				// Moved!
+				// 1. Update 'sk->src_path'
+				sk->src_path.parse_re(str_local_addr);
+			}
+
+			// Case of initial binding to only SID
+			if (sk->full_src_dag == false) {
+				sk->full_src_dag = true;
+				String str_local_addr = _local_addr.unparse_re();
+				XID front_xid = sk->src_path.xid(sk->src_path.destination_node());
+				String xid_string = front_xid.unparse();
+				str_local_addr = str_local_addr + " " + xid_string; // Make source DAG _local_addr:SID
+				sk->src_path.parse_re(str_local_addr);
+			}
+			*/
+			// Add XIA headers
+			XIAHeaderEncap xiah_new;
+			xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
+			xiah_new.set_last(LAST_NODE_DEFAULT);
+			xiah_new.set_hlim(HLIM_DEFAULT); // xiah.set_hlim(hlim.get(_sport));??
+			xiah_new.set_dst_path(sk->dst_path);
+			xiah_new.set_src_path(sk->src_path);
+
+			const char* dummy = "FIN";
+			WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
+
+			WritablePacket *p = NULL;
+
+			xiah_new.set_plen(strlen(dummy));
+
+			TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeFINHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
+			p = thdr_new->encap(just_payload_part);
+
+			thdr_new->update();
+			xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
+
+			p = xiah_new.encap(p, false);
+			delete thdr_new;
+
+			// Set timer
+			sk->timer_on = true;
+			sk->finack_waiting = true;
+			sk->finack_expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+
+			if (! _timer.scheduled() || _timer.expiry() >= sk->finack_expiry)
+				_timer.reschedule_at(sk->finack_expiry);
+
+			// Store the syn packet for potential retransmission
+			sk->fin_pkt = copy_packet(p, sk);
+
+			XIAHeader xiah1(p);
+			String pld((char *)xiah1.payload(), xiah1.plen());
+			//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
+				
+			output(NETWORK_PORT).push(p);
+			click_chatter("Sent FIN, closing on port %d at %ld......\n", _sport, Timestamp::now());
 		}
-
-		// Case of initial binding to only SID
-		if (sk->full_src_dag == false) {
-			sk->full_src_dag = true;
-			String str_local_addr = _local_addr.unparse_re();
-			XID front_xid = sk->src_path.xid(sk->src_path.destination_node());
-			String xid_string = front_xid.unparse();
-			str_local_addr = str_local_addr + " " + xid_string; // Make source DAG _local_addr:SID
-			sk->src_path.parse_re(str_local_addr);
-		}
-		*/
-		// Add XIA headers
-		XIAHeaderEncap xiah_new;
-		xiah_new.set_nxt(CLICK_XIA_NXT_TRN);
-		xiah_new.set_last(LAST_NODE_DEFAULT);
-		xiah_new.set_hlim(HLIM_DEFAULT); // xiah.set_hlim(hlim.get(_sport));??
-		xiah_new.set_dst_path(sk->dst_path);
-		xiah_new.set_src_path(sk->src_path);
-
-		const char* dummy = "FIN";
-		WritablePacket *just_payload_part = WritablePacket::make(256, dummy, strlen(dummy), 0);
-
-		WritablePacket *p = NULL;
-
-		xiah_new.set_plen(strlen(dummy));
-
-		TransportHeaderEncap *thdr_new = TransportHeaderEncap::MakeFINHeader(0, sk->next_recv_seqnum, 0, calc_recv_window(sk)); // #seq, #ack, length, recv_wind
-		p = thdr_new->encap(just_payload_part);
-
-		thdr_new->update();
-		xiah_new.set_plen(strlen(dummy) + thdr_new->hlen()); // XIA payload = transport header + transport-layer data
-
-		p = xiah_new.encap(p, false);
-		delete thdr_new;
-
+		
+	//	if (sk->recv_pending == true)
+	//		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
+		// chenren: send FIN ends
+		
 		// Set timer
 		sk->timer_on = true;
-		sk->finack_waiting = true;
-		sk->finack_expiry = Timestamp::now() + Timestamp::make_msec(_ackdelay_ms);
+		sk->teardown_waiting = true;
+		sk->teardown_expiry = Timestamp::now() + Timestamp::make_msec(_teardown_wait_ms);
 
-		if (! _timer.scheduled() || _timer.expiry() >= sk->finack_expiry)
-			_timer.reschedule_at(sk->finack_expiry);
+		if (! _timer.scheduled() || _timer.expiry() >= sk->teardown_expiry)
+			_timer.reschedule_at(sk->teardown_expiry);
 
-		// Store the syn packet for potential retransmission
-		sk->fin_pkt = copy_packet(p, sk);
-
-		XIAHeader xiah1(p);
-		String pld((char *)xiah1.payload(), xiah1.plen());
-		//click_chatter("\n\n (%s) send=%s  len=%d \n\n", (_local_addr.unparse()).c_str(), pld.c_str(), xiah1.plen());
-			
-		output(NETWORK_PORT).push(p);
-		click_chatter("Sent FIN, closing on port %d at %ld......\n", _sport, Timestamp::now());
+		portToSock.set(_sport, sk);
 	}
-//	if (sk->recv_pending == true)
-//		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
-	// chenren: send FIN ends
-	
-	// Set timer
-	sk->timer_on = true;
-	sk->teardown_waiting = true;
-	sk->teardown_expiry = Timestamp::now() + Timestamp::make_msec(_teardown_wait_ms);
-
-	if (! _timer.scheduled() || _timer.expiry() >= sk->teardown_expiry)
-		_timer.reschedule_at(sk->teardown_expiry);
-
-	portToSock.set(_sport, sk);
-
 	xcmp_listeners.remove(_sport);
 
 	ReturnResult(_sport, xia_socket_msg);
+
 }
 
 void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
@@ -2290,7 +2304,7 @@ void XTRANSPORT::Xconnect(unsigned short _sport, xia::XSocketMsg *xia_socket_msg
 
 	sk->dst_path = dst_path;
 	sk->port = _sport;
-	sk->isConnected = -1; // chenren: change from 1 to -1
+	sk->isConnected = CONNECTING; // chenren: change from 1 to -1
 	sk->initialized = true;
 	sk->ddag = dest;
 	sk->seq_num = 0;
@@ -2419,7 +2433,7 @@ void XTRANSPORT::Xaccept(unsigned short _sport, xia::XSocketMsg *xia_socket_msg)
 	if (!sk->pending_connection_buf.empty()) {
 		sock *new_sk = sk->pending_connection_buf.front();
 		click_chatter("Get front element from and assign port number %d.", new_port);
-		if(new_sk->isConnected != 1) {
+		if(new_sk->isConnected != CONNECTED) {
 			click_chatter("Xtransport: Xaccept: ERROR: sock from pending_connection_buf !isconnected\n");
 		} else {
 			click_chatter("Xtransport: Socket on port %d is now connected\n", new_port);
@@ -2544,9 +2558,10 @@ void XTRANSPORT::CancelPollEvent(unsigned short _sport) {
 	// decrement the polling count for all the sockets in the poll instance
 	for (HashTable<unsigned short, unsigned int>::iterator pit = pe.events.begin(); pit != pe.events.end(); pit++) {
 		unsigned short port = pit->first;
-
 		sock *sk = portToSock.get(port);
-		sk->polling--;
+		if (sk) {
+			sk->polling--;
+		}
 	}
 
 	// get rid of this poll event
@@ -2635,7 +2650,7 @@ void XTRANSPORT::Xpoll(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 					// see if the socket is writable
 					// FIXME should we be looking for anything else (send window, etc...)
 					if (sk->sock_type == SOCK_STREAM) {
-						if (sk->isConnected == 1) {
+						if (sk->isConnected == CONNECTED) {
 							// printf("stream socket is connected, so setting POLLOUT: %d\n", port);
 							flags_out |= POLLOUT;
 						}
@@ -2783,7 +2798,7 @@ void XTRANSPORT::Xsend(unsigned short _sport, xia::XSocketMsg *xia_socket_msg, W
 	}
 
 	// Make sure socket is connected
-	if (rc == 0 && !sk->isConnected) {
+	if (rc == 0 && sk->isConnected != CONNECTED) {
 		rc = -1;
 		ec = ENOTCONN;
 	}
@@ -3001,25 +3016,27 @@ void XTRANSPORT::Xsendto(unsigned short _sport, xia::XSocketMsg *xia_socket_msg,
 
 void XTRANSPORT::Xrecv(unsigned short _sport, xia::XSocketMsg *xia_socket_msg) {
 	sock *sk = portToSock.get(_sport);
-	read_from_recv_buf(xia_socket_msg, sk);
+	if (sk && sk->isClosed == NOTCLOSED) {
+		read_from_recv_buf(xia_socket_msg, sk);
 
-	if (xia_socket_msg->x_recv().bytes_returned() > 0) {
-		// Return response to API
-		ReturnResult(_sport, xia_socket_msg, xia_socket_msg->x_recv().bytes_returned());
-	} 
-	else if (!xia_socket_msg->blocking()) {
-		// we're not blocking and there's no data, so let API know immediately
-		sk->recv_pending = false;
-		ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
-	} 
-	else {
-		// rather than returning a response, wait until we get data
-		sk->recv_pending = true; // when we get data next, send straight to app
+		if (xia_socket_msg->x_recv().bytes_returned() > 0) {
+			// Return response to API
+			ReturnResult(_sport, xia_socket_msg, xia_socket_msg->x_recv().bytes_returned());
+		} 
+		else if (!xia_socket_msg->blocking()) {
+			// we're not blocking and there's no data, so let API know immediately
+			sk->recv_pending = false;
+			ReturnResult(_sport, xia_socket_msg, -1, EWOULDBLOCK);
+		} 
+		else {
+			// rather than returning a response, wait until we get data
+			sk->recv_pending = true; // when we get data next, send straight to app
 
-		// xia_socket_msg is saved on the stack; allocate a copy on the heap
-		xia::XSocketMsg *xsm_cpy = new xia::XSocketMsg();
-		xsm_cpy->CopyFrom(*xia_socket_msg);
-		sk->pending_recv_msg = xsm_cpy;
+			// xia_socket_msg is saved on the stack; allocate a copy on the heap
+			xia::XSocketMsg *xsm_cpy = new xia::XSocketMsg();
+			xsm_cpy->CopyFrom(*xia_socket_msg);
+			sk->pending_recv_msg = xsm_cpy;
+		}
 	}
 }
 

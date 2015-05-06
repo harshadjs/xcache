@@ -79,6 +79,15 @@ using namespace std;
 #define CACHE_PORT		3
 #define XHCP_PORT			4
 
+// chenren add
+#define NOTCONNECTED 0
+#define CONNECTING -1
+#define CONNECTED 1
+
+#define NOTCLOSED 0;
+#define CLOSING -1
+#define CLOSED 1
+// chenren add
 
 /* TCP params from http://lxr.linux.no/linux+v3.10.2/include/net/tcp.h */
 
@@ -326,7 +335,7 @@ class XTRANSPORT : public Element {
 	 * Socket states
 	 * ========================= */
     struct sock {
-    	sock(): port(0), isConnected(0), isClosed(0), initialized(false), // chenren: changed isConnected and isclosed from false to 0
+    	sock(): port(0), isConnected(NOTCONNECTED), isClosed(NOTCLOSED), initialized(false), // chenren: changed isConnected and isclosed from false to 0
 							full_src_dag(false), timer_on(false), synack_waiting(false), 
 							synackack_waiting(false), finack_waiting(false), finackack_waiting(false), // chenren: added 
 							dataack_waiting(false), teardown_waiting(false), 
@@ -400,7 +409,7 @@ class XTRANSPORT : public Element {
 			WritablePacket *syn_pkt; 
 			WritablePacket *synack_pkt; // chenren: for retransmission
 			WritablePacket *fin_pkt; 		// chenren: for retransmission
-			WritablePacket *finack_pkt; // chenren: for retransmission			
+			WritablePacket *finack_pkt; // chenren: for retransmission
 			HashTable<XID, WritablePacket*> XIDtoCIDreqPkt;
 			HashTable<XID, Timestamp> XIDtoExpiryTime;
 			HashTable<XID, bool> XIDtoTimerOn;
