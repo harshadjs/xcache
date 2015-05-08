@@ -84,7 +84,7 @@ using namespace std;
 #define CONNECTING -1
 #define CONNECTED 1
 
-#define NOTCLOSED 0;
+#define ACTIVE 0
 #define CLOSING -1
 #define CLOSED 1
 // chenren add
@@ -143,7 +143,7 @@ using namespace std;
 #define TCP_TIMEWAIT_LEN (60*HZ) /* how long to wait to destroy TIME-WAIT
 				  * state, about 60 seconds	*/
 #define TCP_FIN_TIMEOUT	TCP_TIMEWAIT_LEN
-                                 /* BSD style FIN_WAIT2 deadlock breaker.
+	                             /* BSD style FIN_WAIT2 deadlock breaker.
 				  * It used to be 3min, new value is 60sec,
 				  * to combine FIN-WAIT-2 timeout with
 				  * TIME-WAIT timer.
@@ -287,45 +287,45 @@ typedef struct {
 
 class XTRANSPORT : public Element { 
   public:
-    XTRANSPORT();
-    ~XTRANSPORT();
-    const char *class_name() const		{ return "XTRANSPORT"; }
-    const char *port_count() const		{ return "5/4"; }
-    const char *processing() const		{ return PUSH; }
-    int configure(Vector<String> &, ErrorHandler *);         
-    void push(int port, Packet *);            
-    XID local_hid() { return _local_hid; };
-    XIAPath local_addr() { return _local_addr; };
-    XID local_4id() { return _local_4id; };
-    void add_handlers();
-    static int write_param(const String &, Element *, void *vparam, ErrorHandler *);
-    
-    int initialize(ErrorHandler *);
-    void run_timer(Timer *timer);
+	XTRANSPORT();
+	~XTRANSPORT();
+	const char *class_name() const		{ return "XTRANSPORT"; }
+	const char *port_count() const		{ return "5/4"; }
+	const char *processing() const		{ return PUSH; }
+	int configure(Vector<String> &, ErrorHandler *);         
+	void push(int port, Packet *);            
+	XID local_hid() { return _local_hid; };
+	XIAPath local_addr() { return _local_addr; };
+	XID local_4id() { return _local_4id; };
+	void add_handlers();
+	static int write_param(const String &, Element *, void *vparam, ErrorHandler *);
+	
+	int initialize(ErrorHandler *);
+	void run_timer(Timer *timer);
 
-    void ReturnResult(int sport, xia::XSocketMsg *xia_socket_msg, int rc = 0, int err = 0);
-    
+	void ReturnResult(int sport, xia::XSocketMsg *xia_socket_msg, int rc = 0, int err = 0);
+	
   private:
 //  pthread_mutex_t _lock;
 //  pthread_mutexattr_t _lock_attr;
 
-    SyslogErrorHandler *_errh;
+	SyslogErrorHandler *_errh;
 
-    Timer _timer;
-    
-    unsigned _ackdelay_ms;
-    unsigned _teardown_wait_ms;
-    
-    uint32_t _cid_type, _sid_type;
-    XID _local_hid;
-    XIAPath _local_addr;
-    XID _local_4id;
-    XID _null_4id;
-    bool _is_dual_stack_router;
-    bool isConnected;
-    XIAPath _nameserver_addr;
+	Timer _timer;
+	
+	unsigned _ackdelay_ms;
+	unsigned _teardown_wait_ms;
+	
+	uint32_t _cid_type, _sid_type;
+	XID _local_hid;
+	XIAPath _local_addr;
+	XID _local_4id;
+	XID _null_4id;
+	bool _is_dual_stack_router;
+	bool connState;
+	XIAPath _nameserver_addr;
 
-    Packet* UDPIPPrep(Packet *, int);
+	Packet* UDPIPPrep(Packet *, int);
 
 		/* TODO: sock (previously named DAGinfo) stores per-socket states for ALL transport protocols. We better make a specialized struct for each protocol
 		 *	(e.g., xsp_sock, tcp_sock) that is inherited from sock struct. Not sure if HashTable<XID, sock> will work. Use HashTable<XID, sock*> instead?
@@ -334,8 +334,8 @@ class XTRANSPORT : public Element {
 	/* =========================
 	 * Socket states
 	 * ========================= */
-    struct sock {
-    	sock(): port(0), isConnected(NOTCONNECTED), isClosed(NOTCLOSED), initialized(false), // chenren: changed isConnected and isclosed from false to 0
+	struct sock {
+		sock(): port(0), connState(NOTCONNECTED), closeState(ACTIVE), initialized(false), // chenren: changed connState and closeState from false to 0
 							full_src_dag(false), timer_on(false), synack_waiting(false), 
 							synackack_waiting(false), finack_waiting(false), finackack_waiting(false), // chenren: added 
 							dataack_waiting(false), teardown_waiting(false), 
@@ -367,8 +367,8 @@ class XTRANSPORT : public Element {
 		 * XSP/XChunkP Socket states
 		 * ========================= */
 
-			int isConnected; 	// chenren: change bool to int; {-1,0,1} represents pending, closed and connected
-			int	isClosed; 		// chenren: added: {-1,0,1} represents pending, connected and closed 
+			int connState; 	// chenren: change bool to int; {-1,0,1} represents pending, closed and connected
+			int	closeState; 		// chenren: added: {-1,0,1} represents pending, connected and closed 
 			bool initialized;
 			bool isAcceptSocket;
 			bool synack_waiting;
@@ -543,7 +543,7 @@ class XTRANSPORT : public Element {
 				uint32_t	seq;
 				uint32_t	time;
 			} rcvq_space;    
-    };
+	};
 
 		list<int> xcmp_listeners;   // list of ports wanting xcmp notifications
 
@@ -551,11 +551,11 @@ class XTRANSPORT : public Element {
 		HashTable<XIDpair , unsigned short> XIDpairToPort;
 		HashTable<unsigned short, sock*> portToSock;
 		HashTable<XID, unsigned short> XIDtoPushPort;
-    
+   
 		HashTable<unsigned short, bool> portToActive;
 		HashTable<XIDpair , bool> XIDpairToConnectPending;
 
-    // FIXME: can these be rolled into the sock structure?
+	// FIXME: can these be rolled into the sock structure?
 		HashTable<unsigned short, int> nxt_xport;
 		HashTable<unsigned short, int> hlim;
 		HashTable<unsigned short, PollEvent> poll_events;
@@ -563,17 +563,17 @@ class XTRANSPORT : public Element {
 		atomic_uint32_t _id;
 		bool _cksum;
 		XIAXIDRouteTable *_routeTable;
-    
-    // modify routing table
+   
+	// modify routing table
 		void addRoute(const XID &sid) {
 			String cmd = sid.unparse() + " " + String(DESTINED_FOR_LOCALHOST);
 			HandlerCall::call_write(_routeTable, "add", cmd);
-    }   
-        
+	}   
+
 		void delRoute(const XID &sid) {
 			String cmd = sid.unparse();
 			HandlerCall::call_write(_routeTable, "remove", cmd);
-    }
+	}
  
   protected:    
 		void copy_common(struct sock *sk, XIAHeader &xiahdr, XIAHeaderEncap &xiah);
@@ -605,7 +605,7 @@ class XTRANSPORT : public Element {
 		void CancelPollEvent(unsigned short _sport);
 		// bool ProcessPollTimeout(unsigned short, PollEvent& pe);
 
-    // Xsockets API handlers
+	// Xsockets API handlers
 		void Xsocket(unsigned short _sport, xia::XSocketMsg *xia_socket_msg);
 		void Xsetsockopt(unsigned short _sport, xia::XSocketMsg *xia_socket_msg);
 		void Xgetsockopt(unsigned short _sport, xia::XSocketMsg *xia_socket_msg);
