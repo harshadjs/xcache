@@ -1,0 +1,130 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <title>X-cache by harshadjs</title>
+
+    <!--[if lt IE 9]>
+    <script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script>
+    <![endif]-->
+  </head>
+  <body>
+    <div class="wrapper">
+      <header>
+        <h1>X-cache Function List</h1>
+        <p>
+	<p>
+	  <b>Xcache Socket</b>
+	  <ul>
+	    <li>
+	      <a href="man/XcacheSock.man.html">
+		int XcacheSocket(void)
+	      </a>
+	    </li>
+	    Allocates a socket for communication with Xcache.
+	  </ul>
+	</p>
+	<p>
+	  <b>Slice manipulation</b>
+	  <ul>
+	    <li><a href="man/Xslice.man.html">ChunkContext *XallocateSlice (int xcacheSock, struct sliceInfo *info)</a></li>
+	    Allocates XIA Cache Slice.
+
+	    <li><a href="man/Xslice.man.html">int XfreeSlice(int xcacheSock, ChunkContext *ctx)</a></li>
+	    Frees up XIA Cache Slice.
+	  </ul>
+	</p>
+	<p>
+	  <b>Content Publishing</b>
+	  <ul>
+	    <li>
+	      <a href="man/Xput.man.html">
+		int XputChunk(int xcacheSock, ChunkContext *ctx, const void *data,
+		size_t length, ChunkInfo *info)
+	      </a>
+	    </li>
+	    Publishes a single content chunk.
+	    <li>
+	      <a href="man/Xput.man.html">
+		int XputFile(int xcacheSock, ChunkContext *ctx, const char *filename,
+		size_t chunkSize, ChunkInfo **info)
+	      </a>
+	    </li>
+	      Breaks file into chunks and publishes the chunks.
+	    <li>
+	      <a href="man/Xput.man.html">
+		int XputBuffer(int xcacheSock, ChunkContext *ctx, const void *data,
+		size_t length, size_t chunkSize, ChunkInfo **info)
+	      </a>
+	    </li>
+	      Breaks buffer into chunks and publishes the chunks.
+	  </ul>
+	</p>
+	<p>
+	  <b>Content Retrieval</b>
+	  <ul>
+	    <li>
+	      <a href="man/XrequestChunk.man.html">
+		int XrequestChunk(int xcacheSock, sockaddr_x *addr, socklen_t addrlen, int flags)
+	      </a>
+	    </li>
+	    Sends request to fetch content.
+	    <li>
+	      <a href="man/XgetChunk.man.html">
+		int XgetChunk(int xcacheSock, void *buf, size_t buflen, sockaddr_x *addr, socklen_t addrlen, int *flags)
+	      </a>
+	    </li>
+	    Fetches chunk from the network and puts in buffer.
+	  </ul>
+	</p>
+	<p>
+	  <b>Content Access</b>
+	  <ul>
+	    <li>
+	      <a href="man/XopenChunk.man.html">
+		int XopenChunk(const char *cid, int cidlen)
+	      </a>
+	    </li>
+	    Opens a chunk for reading.
+	    <li>
+	      <a href="man/XreadChunk.man.html">
+		int XreadChunk(int xcacheSock, void *buf, size_t bulen)
+	      </a>
+	    </li>
+	    Reads chunk.
+	    <li>
+	      <a href="man/XgetChunkStatus.man.html">
+		int XgetChunkStatus(int xcacheSock, const char *cid, size_t len)
+	      </a>
+	    </li>
+	    Fetches the current status of chunk.
+	  </ul>
+	</p>
+	<p>
+	  <b>Xcache Notifications</b>
+	  <ul>
+	    <li>
+	      <a href="man/XcacheNotifications.man.html">
+		int XregisterNotification(int events, void (*func)(int event, const char *cid, int cidlen))
+	      </a>
+	    </li>
+	    Registers a listener function for event(s).
+	    <li>
+	      <a href="man/XcacheNotifications.man.html">
+		int XprocessNotification(int xcacheSock)
+	      </a>
+	    </li>
+	    Invokes listeneres on reception of notifications.
+	  </ul>
+	</p>
+	</p>
+
+      </header>
+      <section>
+        <h1>
+    </div>
+    <script src="javascripts/scale.fix.js"></script>
+    
+  </body>
+</html>

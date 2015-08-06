@@ -1,0 +1,192 @@
+<!-- Creator     : groff version 1.22.3 -->
+<!-- CreationDate: Thu Aug  6 00:24:29 2015 -->
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+"http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+<meta name="generator" content="groff -Thtml, see www.gnu.org">
+<meta http-equiv="Content-Type" content="text/html; charset=US-ASCII">
+<meta name="Content-Style" content="text/css">
+<style type="text/css">
+       p       { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       pre     { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       table   { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       h1      { text-align: center }
+</style>
+<title>Xslice</title>
+
+</head>
+<body>
+
+<h1 align="center">Xslice</h1>
+
+<a href="#NAME">NAME</a><br>
+<a href="#SYNOPSIS">SYNOPSIS</a><br>
+<a href="#DESCRIPTION">DESCRIPTION</a><br>
+<a href="#RETURN VALUE">RETURN VALUE</a><br>
+<a href="#ERRORS">ERRORS</a><br>
+<a href="#EXAMPLE">EXAMPLE</a><br>
+<a href="#SEE ALSO">SEE ALSO</a><br>
+<a href="#AUTHOR">AUTHOR</a><br>
+
+<hr>
+
+
+<h2>NAME
+<a name="NAME"></a>
+</h2>
+
+
+
+<p style="margin-left:11%; margin-top: 1em">XallocateSlice,
+XfreeSlice &minus; Slice manipulation functions.</p>
+
+<h2>SYNOPSIS
+<a name="SYNOPSIS"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>#include
+&lt;xcache.h&gt;</b></p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>ChunkContext
+*XallocateSlice(int xcacheSock, struct sliceInfo *info);
+<br>
+int XfreeSlice(int xcacheSock, ChunkContext *ctx);</b></p>
+
+<h2>DESCRIPTION
+<a name="DESCRIPTION"></a>
+</h2>
+
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XallocateSlice()</b>
+creates a context for publishing content using
+<b>XputBuffer(8), XputFile(8), XputChunk(8).</b> The
+argument <i>xcacheSock</i> must be a connected xcache socket
+returned by <b>XcacheSock().</b> The argument <i>info</i>
+must point to a structure sliceInfo.</p>
+
+<p style="margin-left:11%; margin-top: 1em">struct
+sliceInfo {</p>
+
+<p style="margin-left:22%;">enum XcacheEvictionPolicy
+policy; <br>
+uint64_t size; <br>
+uint64_t ttl; <br>
+int contentStore;</p>
+
+<p style="margin-left:11%;">};</p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><i>info-&gt;policy</i>
+must choose a value from following enum:</p>
+
+<p style="margin-left:11%; margin-top: 1em">enum
+XcacheEvictionPolicy {</p>
+
+<p style="margin-left:22%;">XCACHE_EVICT_POLICY_FIFO, <br>
+XCACHE_EVICT_POLICY_LRU,</p>
+
+<p style="margin-left:11%;">};</p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><i>info-&gt;size</i>
+is the size of cache slice in bytes. When slice becomes
+full, xcache evicts a content chunk by following
+<i>info-&gt;policy</i> eviction policy. The event of
+eviction is notified back to the application on
+<i>xcacheSock</i> as a <b>XCE_EVICTED</b> notification. See
+XcacheNotifications(8) for more details.</p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><i>info-&gt;ttl</i>
+is the timeout in seconds after which all the content chunks
+are evicted. This eviction generates a
+<b>XCACHE_SLICE_EXPIRED</b> notification on <i>xcacheSock.
+info-&gt;ttl</i> can be set to <b>XCACHE_INF</b> in which
+case, the slice never expires until freed by
+<b>XfreeSlice().</b></p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><i>info-&gt;contentStore</i>
+is unused.</p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XfreeSlice()</b>
+frees a ChunkContext allocated by <b>XallocateSlice().</b>
+Freeing of slice does not generate any xcache
+notification.</p>
+
+<h2>RETURN VALUE
+<a name="RETURN VALUE"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">On success,
+<b>XallocateSlice()</b> returns a chunk context. On failure,
+it returns NULL and errno is set appropriately. On success,
+<b>XfreeSlice()</b> returns 0. On failure, it returnes -1
+and errno is set appropriately.</p>
+
+<h2>ERRORS
+<a name="ERRORS"></a>
+</h2>
+
+
+<table width="100%" border="0" rules="none" frame="void"
+       cellspacing="0" cellpadding="0">
+<tr valign="top" align="left">
+<td width="11%"></td>
+<td width="-3%">
+
+
+<p><b>ENOTCONN</b></p></td>
+<td width="7%"></td>
+<td width="8%"></td>
+<td width="77%">
+
+
+<p>XcacheSock is not connected.</p></td></tr>
+<tr valign="top" align="left">
+<td width="11%"></td>
+<td width="-3%">
+
+
+<p><b>EHOSTDOWN</b></p></td>
+<td width="7%"></td>
+<td width="8%"></td>
+<td width="77%">
+
+
+<p>Xcache is not running.</p></td></tr>
+</table>
+
+<h2>EXAMPLE
+<a name="EXAMPLE"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">See
+<b>Xput(8).</b></p>
+
+<h2>SEE ALSO
+<a name="SEE ALSO"></a>
+</h2>
+
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XcacheSocket(8),
+Xput(8), Xget(8)</b></p>
+
+<h2>AUTHOR
+<a name="AUTHOR"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">Harshad
+Shirwadkar &lt;harshad@cmu.edu&gt;</p>
+<hr>
+</body>
+</html>

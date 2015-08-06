@@ -1,0 +1,170 @@
+<!-- Creator     : groff version 1.22.3 -->
+<!-- CreationDate: Thu Aug  6 00:24:28 2015 -->
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+"http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+<meta name="generator" content="groff -Thtml, see www.gnu.org">
+<meta http-equiv="Content-Type" content="text/html; charset=US-ASCII">
+<meta name="Content-Style" content="text/css">
+<style type="text/css">
+       p       { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       pre     { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       table   { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       h1      { text-align: center }
+</style>
+<title>XcacheNotifications</title>
+
+</head>
+<body>
+
+<h1 align="center">XcacheNotifications</h1>
+
+<a href="#NAME">NAME</a><br>
+<a href="#SYNOPSIS">SYNOPSIS</a><br>
+<a href="#DESCRIPTION">DESCRIPTION</a><br>
+<a href="#RETURN VALUE">RETURN VALUE</a><br>
+<a href="#ERRORS">ERRORS</a><br>
+<a href="#EXAMPLE">EXAMPLE</a><br>
+<a href="#SEE ALSO">SEE ALSO</a><br>
+<a href="#AUTHOR">AUTHOR</a><br>
+
+<hr>
+
+
+<h2>NAME
+<a name="NAME"></a>
+</h2>
+
+
+
+<p style="margin-left:11%; margin-top: 1em">XcacheNotifications
+&minus; Xcache Notifications.</p>
+
+<h2>SYNOPSIS
+<a name="SYNOPSIS"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>#include
+&lt;xcache.h&gt;</b></p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>int
+XregisterNotification(int events, void (*func)(int event,
+const char *cid, int cidlen)); <br>
+int XprocessNotification(int xcacheSock);</b></p>
+
+<h2>DESCRIPTION
+<a name="DESCRIPTION"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">Xcache
+Notifications is a mechanism used by Xcache Daemon to notify
+applications about the happening of events. Applications
+register to the events of their interest by calling
+<i>XregisterNotification</i> function. The argument
+<i>event</i> is the event for which the application is
+registering. Following events are supported.</p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XCE_CHUNKARRIVED</b></p>
+
+<p style="margin-left:22%;">Chunk arrived.</p>
+
+<p style="margin-left:11%;"><b>XCE_CHUNKEVICTED</b></p>
+
+<p style="margin-left:22%;">Chunk evicted.</p>
+
+<p style="margin-left:11%;"><b>XCE_SLICEEXPIRED</b></p>
+
+<p style="margin-left:22%;">Slice expired.</p>
+
+<p style="margin-left:11%; margin-top: 1em">Applications
+can register to multiple events by a single call to
+<i>XregisterNotification().</i> This achieved by setting
+<i>events</i> to bitwise-OR of multiple events. The argument
+<i>func</i> is a function pointer to the function that needs
+to be invoked on happening of any event in set <i>events.
+func</i> knows about the exact event in its first argument
+<i>event. func</i> knows about the CID of the chunk on which
+that particular event happened as the second argument
+<i>cid. cid</i> is of length <i>cidlen.</i></p>
+
+<p style="margin-left:11%; margin-top: 1em">Xcache sends
+these notifications on <b>ALL</b> the sockets allocated by
+<b>XcacheSocket(8).</b> Normally, applications should not
+need more than one such socket. Application does not need to
+parse and process any notification by itself. Function
+<b>XprocessNotification()</b> parses the incoming
+notification and invokes appropriate registered function.
+<b>xcacheSock</b> must be allocated <b>XcacheSocket()</b>
+call.</p>
+
+<h2>RETURN VALUE
+<a name="RETURN VALUE"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">On success
+<b>XregisterNotification()</b> returns 0. On failure it
+returns -1. <b>XprocessNotification()</b> returns the number
+of notifications received.</p>
+
+<h2>ERRORS
+<a name="ERRORS"></a>
+</h2>
+
+
+<table width="100%" border="0" rules="none" frame="void"
+       cellspacing="0" cellpadding="0">
+<tr valign="top" align="left">
+<td width="11%"></td>
+<td width="-3%">
+
+
+<p><b>ENOTCONN</b></p></td>
+<td width="7%"></td>
+<td width="8%"></td>
+<td width="77%">
+
+
+<p>XcacheSock is not connected.</p></td></tr>
+<tr valign="top" align="left">
+<td width="11%"></td>
+<td width="-3%">
+
+
+<p><b>EHOSTDOWN</b></p></td>
+<td width="7%"></td>
+<td width="8%"></td>
+<td width="77%">
+
+
+<p>Xcache is not running.</p></td></tr>
+</table>
+
+<h2>EXAMPLE
+<a name="EXAMPLE"></a>
+</h2>
+
+
+<h2>SEE ALSO
+<a name="SEE ALSO"></a>
+</h2>
+
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XopenChunk(8),
+Xput(8), Xget(8)</b></p>
+
+<h2>AUTHOR
+<a name="AUTHOR"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">Harshad
+Shirwadkar &lt;harshad@cmu.edu&gt;</p>
+<hr>
+</body>
+</html>

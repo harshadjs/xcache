@@ -1,0 +1,164 @@
+<!-- Creator     : groff version 1.22.3 -->
+<!-- CreationDate: Thu Aug  6 00:24:28 2015 -->
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
+"http://www.w3.org/TR/html4/loose.dtd">
+<html>
+<head>
+<meta name="generator" content="groff -Thtml, see www.gnu.org">
+<meta http-equiv="Content-Type" content="text/html; charset=US-ASCII">
+<meta name="Content-Style" content="text/css">
+<style type="text/css">
+       p       { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       pre     { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       table   { margin-top: 0; margin-bottom: 0; vertical-align: top }
+       h1      { text-align: center }
+</style>
+<title>XgetChunk</title>
+
+</head>
+<body>
+
+<h1 align="center">XgetChunk</h1>
+
+<a href="#NAME">NAME</a><br>
+<a href="#SYNOPSIS">SYNOPSIS</a><br>
+<a href="#DESCRIPTION">DESCRIPTION</a><br>
+<a href="#RETURN VALUE">RETURN VALUE</a><br>
+<a href="#ERRORS">ERRORS</a><br>
+<a href="#EXAMPLE">EXAMPLE</a><br>
+<a href="#SEE ALSO">SEE ALSO</a><br>
+<a href="#AUTHOR">AUTHOR</a><br>
+
+<hr>
+
+
+<h2>NAME
+<a name="NAME"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">XgetChunk
+&minus; Get chunk in memory.</p>
+
+<h2>SYNOPSIS
+<a name="SYNOPSIS"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>#include
+&lt;xcache.h&gt;</b></p>
+
+<p style="margin-left:11%; margin-top: 1em"><b>int
+XgetChunk(int xcacheSock, void *buf, size_t buflen,
+sockaddr_x *addr, socklen_t addrlen, int *flags);</b></p>
+
+<h2>DESCRIPTION
+<a name="DESCRIPTION"></a>
+</h2>
+
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XgetChunk()</b>
+fetches the chunk with address <i>addr</i> from the XIA
+network into the buffer pointed to by <i>buf.</i> At the
+max, <i>buflen</i> bytes are copied. If the chunk is of size
+greater than <i>buflen,</i> then the rest of the bytes are
+discarded and <b>XCF_OVERFLOW</b> is set in <i>*flags.</i>
+The argument <i>xcacheSock</i> must be a file descriptor
+returned by <b>xcacheSocket(8).</b> The argument
+<i>addrlen</i> must be set to the length of the address of
+the chunk pointed to by <i>addr.</i> By default, arrived
+chunks are not cached by the xcache. But, this behaviour can
+be overridden by setting <b>XCF_DOCACHE (See below).</b></p>
+
+<p style="margin-left:11%; margin-top: 1em">The argument
+<i>flags</i> is both input as well as output argument.
+Before the call, <i>flags</i> can be set by
+bitwise-OR&rsquo;ing one or more of the following
+options:</p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XCF_DOCACHE</b></p>
+
+<p style="margin-left:22%;">Overrides no-cache behaviour
+i.e. on arrival of a chunk the chunk is cached by local
+xcache.</p>
+
+<p style="margin-left:11%; margin-top: 1em">On return, one
+or more of the following options can be set:</p>
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XCF_OVERFLOW</b></p>
+
+<p style="margin-left:22%;">Chunk was too big to fit in the
+supplied buffer.</p>
+
+<h2>RETURN VALUE
+<a name="RETURN VALUE"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">On success, the
+number of bytes successfully copied is returned. On failure,
+-1 is returned and appropriate errno is set.</p>
+
+<h2>ERRORS
+<a name="ERRORS"></a>
+</h2>
+
+
+<table width="100%" border="0" rules="none" frame="void"
+       cellspacing="0" cellpadding="0">
+<tr valign="top" align="left">
+<td width="11%"></td>
+<td width="-3%">
+
+
+<p><b>ENOTCONN</b></p></td>
+<td width="7%"></td>
+<td width="8%"></td>
+<td width="77%">
+
+
+<p>XcacheSock is not connected.</p></td></tr>
+<tr valign="top" align="left">
+<td width="11%"></td>
+<td width="-3%">
+
+
+<p><b>EHOSTDOWN</b></p></td>
+<td width="7%"></td>
+<td width="8%"></td>
+<td width="77%">
+
+
+<p>Xcache is not running.</p></td></tr>
+</table>
+
+<h2>EXAMPLE
+<a name="EXAMPLE"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">See
+<b>XrequestChunk(8).</b></p>
+
+<h2>SEE ALSO
+<a name="SEE ALSO"></a>
+</h2>
+
+
+
+<p style="margin-left:11%; margin-top: 1em"><b>XopenChunk(8),
+Xput(8), Xget(8)</b></p>
+
+<h2>AUTHOR
+<a name="AUTHOR"></a>
+</h2>
+
+
+<p style="margin-left:11%; margin-top: 1em">Harshad
+Shirwadkar &lt;harshad@cmu.edu&gt;</p>
+<hr>
+</body>
+</html>
